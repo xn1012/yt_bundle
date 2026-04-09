@@ -18,5 +18,6 @@ __pycache__/
 
 # Keep repository docs and scripts
 !README.md
+!requirements.txt
 !scripts/
 !scripts/*.py
