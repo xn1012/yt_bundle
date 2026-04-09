@@ -78,6 +78,24 @@ The repository also tracks the Codex skill metadata for this workflow:
 
 The live auto-discovered local skill can be installed under `~/.codex/skills/yt-bundle`. The repository keeps the trigger text, UI metadata, and workflow reference in version control alongside the scripts.
 
+Install the tracked skill into your local Codex skills directory:
+
+```bash
+python3 scripts/install_skill.py
+```
+
+Install into a custom skills root for testing:
+
+```bash
+python3 scripts/install_skill.py --target-dir /tmp/skill-test
+```
+
+Replace an existing installed copy and keep a timestamped backup:
+
+```bash
+python3 scripts/install_skill.py --force
+```
+
 ## Quick Start
 
 Unified pipeline:
