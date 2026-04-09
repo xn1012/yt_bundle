@@ -1,0 +1,22 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# Downloaded media
+*.mp4
+*.m4v
+*.mov
+*.mkv
+*.webm
+*.avi
+
+# Subtitle and generated content
+*.srt
+*.txt
+*.md
+*.json
+
+# Keep repository docs and scripts
+!README.md
+!scripts/
+!scripts/*.py
