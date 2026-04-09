@@ -68,6 +68,16 @@ This will:
 - `scripts/make_bilingual_reading_md.py`
   Older helper for bilingual reading markdown generation.
 
+## Codex Skill
+
+The repository also tracks the Codex skill metadata for this workflow:
+
+- `skills/yt-bundle/SKILL.md`
+- `skills/yt-bundle/agents/openai.yaml`
+- `skills/yt-bundle/references/workflow.md`
+
+The live auto-discovered local skill can be installed under `~/.codex/skills/yt-bundle`. The repository keeps the trigger text, UI metadata, and workflow reference in version control alongside the scripts.
+
 ## Quick Start
 
 Unified pipeline:

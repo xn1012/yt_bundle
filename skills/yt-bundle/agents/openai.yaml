@@ -1,0 +1,4 @@
+interface:
+  display_name: "YT Bundle"
+  short_description: "Download YouTube videos and build transcript bundles"
+  default_prompt: "Use $yt-bundle to download a YouTube video or subtitle source and generate transcript bundles."

@@ -21,3 +21,5 @@ __pycache__/
 !requirements.txt
 !scripts/
 !scripts/*.py
+!skills/
+!skills/**
