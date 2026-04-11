@@ -11,6 +11,7 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
 
 - If the user gives a YouTube URL and wants the whole workflow, run `scripts/yt_bundle.py` from the repository root.
 - If the user gives a YouTube URL and wants audio-only download or audio-based transcription, run `scripts/yt_bundle.py --media-type audio` or `scripts/download_youtube_source.py --media-type audio`.
+- If the user gives a YouTube URL and wants subtitle-only download plus downstream processing, run `scripts/yt_bundle.py --media-type subtitle`.
 - If the user gives a YouTube URL and wants download only, run `scripts/download_youtube_source.py`.
 - If the user gives a local video file, audio file, or subtitle file, run `scripts/make_transcript_bundle.py`.
 - If the user gives a directory and wants missing bundles filled in, run `scripts/make_transcript_bundle.py <dir> --batch`.
@@ -34,6 +35,7 @@ Run the unified workflow:
 ```bash
 python3 scripts/yt_bundle.py "<youtube-url>" [--output-dir "<dir>"] [--cookies-from-browser chrome]
 python3 scripts/yt_bundle.py "<youtube-url>" --media-type audio [--output-dir "<dir>"] [--cookies-from-browser chrome]
+python3 scripts/yt_bundle.py "<youtube-url>" --media-type subtitle [--output-dir "<dir>"] [--cookies-from-browser chrome]
 ```
 
 Run download only:
@@ -41,6 +43,7 @@ Run download only:
 ```bash
 python3 scripts/download_youtube_source.py "<youtube-url>" [--output-dir "<dir>"] [--cookies-from-browser chrome]
 python3 scripts/download_youtube_source.py "<youtube-url>" --media-type audio [--output-dir "<dir>"] [--cookies-from-browser chrome]
+python3 scripts/download_youtube_source.py "<youtube-url>" --media-type subtitle [--output-dir "<dir>"] [--cookies-from-browser chrome]
 ```
 
 Run local bundle generation:

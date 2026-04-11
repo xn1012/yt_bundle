@@ -24,9 +24,10 @@ def parse_args() -> argparse.Namespace:
   python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --cookies-from-browser chrome
   python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --cookies /path/to/cookies.txt
   python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type audio
+  python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type subtitle
 """
     parser = argparse.ArgumentParser(
-        description="Download a YouTube video or audio source, choose the best available subtitle/media source, and generate the transcript bundle.",
+        description="Download a YouTube video, audio, or subtitle source, choose the best available processing source, and generate the transcript bundle.",
         epilog=examples,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -61,9 +62,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--media-type",
-        choices=("video", "audio"),
+        choices=("video", "audio", "subtitle"),
         default="video",
-        help="Download video or audio before bundle generation. Defaults to video.",
+        help="Download video, audio, or subtitles only before bundle generation. Defaults to video.",
     )
     parser.add_argument(
         "--audio-format",

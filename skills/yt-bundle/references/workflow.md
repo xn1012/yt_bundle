@@ -7,6 +7,7 @@ Use `scripts/yt_bundle.py` for the normal end-to-end case:
 ```bash
 python3 scripts/yt_bundle.py "<youtube-url>" --output-dir "<dir>"
 python3 scripts/yt_bundle.py "<youtube-url>" --media-type audio --output-dir "<dir>"
+python3 scripts/yt_bundle.py "<youtube-url>" --media-type subtitle --output-dir "<dir>"
 ```
 
 Add cookies when needed:
@@ -26,6 +27,7 @@ Behavior:
 - then prefer `en`, `en-orig`
 - retry protected downloads with cookies
 - use `--media-type audio` when the user asks to download audio only
+- use `--media-type subtitle` when the user wants subtitle-only download before bundle generation
 
 ## Local Bundle Generation
 

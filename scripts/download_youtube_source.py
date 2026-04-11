@@ -39,9 +39,10 @@ def parse_args() -> argparse.Namespace:
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --cookies-from-browser chrome
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --prefer-subtitle-langs "zh-Hans,zh-Hant,zh,en,en-orig"
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type audio
+  python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type subtitle
 """
     parser = argparse.ArgumentParser(
-        description="Download YouTube video or audio plus preferred English/Chinese subtitles with cookie-based retries.",
+        description="Download YouTube video, audio, or subtitles with preferred English/Chinese subtitle selection and cookie-based retries.",
         epilog=examples,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -76,9 +77,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--media-type",
-        choices=("video", "audio"),
+        choices=("video", "audio", "subtitle"),
         default="video",
-        help="Download video or audio. Defaults to video.",
+        help="Download video, audio, or subtitles only. Defaults to video.",
     )
     parser.add_argument(
         "--audio-format",
@@ -222,16 +223,23 @@ def download_command(
         "yt-dlp",
         "--js-runtimes",
         js_runtime,
-        "-f",
-        fmt if media_type == "video" else (fmt if fmt != "bv*+ba/b" else "ba"),
         "-o",
         "%(title)s [%(id)s].%(ext)s",
         "-P",
         str(output_dir),
     ]
+    if media_type == "subtitle":
+        command.append("--skip-download")
+    else:
+        command.extend(
+            [
+                "-f",
+                fmt if media_type == "video" else (fmt if fmt != "bv*+ba/b" else "ba"),
+            ]
+        )
     if media_type == "video":
         command.extend(["--merge-output-format", "mp4"])
-    else:
+    elif media_type == "audio":
         command.extend(["-x", "--audio-format", audio_format])
     if subtitle_languages:
         command.extend(
