@@ -582,13 +582,13 @@ def source_priority(path: Path) -> tuple[int, int, str]:
     if suffix in SUBTITLE_EXTENSIONS:
         language = path.stem.rpartition(".")[2].lower()
         language_order = {
-            "zh-hans": 0,
-            "zh-cn": 1,
-            "zh": 2,
-            "zh-hant": 3,
-            "zh-tw": 4,
-            "en": 5,
-            "en-orig": 6,
+            "en": 0,
+            "en-orig": 1,
+            "zh-hans": 2,
+            "zh-cn": 3,
+            "zh": 4,
+            "zh-hant": 5,
+            "zh-tw": 6,
         }
         return (0, language_order.get(language, 50), path.name.lower())
     if suffix in AUDIO_EXTENSIONS:

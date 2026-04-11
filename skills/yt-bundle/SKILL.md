@@ -20,7 +20,7 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
 ## Default Behavior
 
 - Write outputs into the user-requested directory. If none is given, use the current working directory.
-- Prefer Chinese subtitles over English subtitles when both exist.
+- Prefer English subtitles over Chinese subtitles when both exist.
 - Fall back to video or audio transcription when subtitles are unavailable.
 - Preserve existing downloaded media and generated outputs unless the user explicitly asks to delete or overwrite.
 - Expect English sources to produce:

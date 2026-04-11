@@ -23,8 +23,8 @@ Use `scripts/download_youtube_source.py` when the user only wants video/audio an
 
 Behavior:
 
-- prefer `zh-Hans`, `zh-Hant`, `zh`
-- then prefer `en`, `en-orig`
+- prefer `en`, `en-orig`
+- then prefer `zh-Hans`, `zh-Hant`, `zh`
 - retry protected downloads with cookies
 - use `--media-type audio` when the user asks to download audio only
 - use `--media-type subtitle` when the user wants subtitle-only download before bundle generation

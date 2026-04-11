@@ -13,7 +13,7 @@ Utilities for:
 This repo is built around one practical workflow:
 
 1. Download a YouTube video or audio source.
-2. Prefer Chinese subtitles when available, otherwise prefer English subtitles.
+2. Prefer English subtitles when available, then Chinese subtitles.
 3. Fall back to video or audio transcription when subtitles are unavailable.
 4. Generate a transcript bundle:
    - raw transcript `.txt`
