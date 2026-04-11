@@ -20,6 +20,7 @@ from urllib.request import Request, urlopen
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"}
 SUBTITLE_EXTENSIONS = {".srt"}
+TEXT_EXTENSIONS = {".txt"}
 LANGUAGE_SUFFIXES = {
     "ar",
     "de",
@@ -49,6 +50,7 @@ SENTENCE_END_CHARS = "。！？!?；;."
 ZH_RE = re.compile(r"[\u4e00-\u9fff]+")
 EN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+_.-]*")
 SRT_BREAK_RE = re.compile(r"\n\s*\n", re.MULTILINE)
+SENTENCE_SPLIT_RE = re.compile(r'(?<=[。！？!?])\s+|(?<=[.])\s+(?=(?:["“”‘’\']?[A-Z]))')
 CACHE_VERSION = 1
 
 TRANSLATION_REPLACEMENTS = {
@@ -108,12 +110,13 @@ def parse_args() -> argparse.Namespace:
   python3 make_transcript_bundle.py "/path/to/video.mp4"
   python3 make_transcript_bundle.py "/path/to/audio.mp3"
   python3 make_transcript_bundle.py "/path/to/subtitle.srt"
+  python3 make_transcript_bundle.py "/path/to/transcript.txt"
   python3 make_transcript_bundle.py "/path/to/video.mp4" --output-dir "/path/to/output"
   python3 make_transcript_bundle.py "/path/to/dir" --batch
   python3 make_transcript_bundle.py "/path/to/dir" --batch --source-kind subtitle
 """
     parser = argparse.ArgumentParser(
-        description="Generate raw transcript txt and reading markdown from a video, audio, or subtitle file.",
+        description="Generate raw transcript txt and reading markdown from a video, audio, subtitle, or transcript txt file.",
         epilog=examples,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -139,11 +142,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--source-kind",
-        choices=("auto", "subtitle", "audio", "video", "media"),
+        choices=("auto", "subtitle", "audio", "video", "media", "text"),
         default="auto",
         help=(
             "Limit which source files are considered. "
-            "Use 'subtitle' for SRT-only batch runs, 'media' for audio+video only, or leave as 'auto'."
+            "Use 'subtitle' for SRT-only batch runs, 'media' for audio+video only, 'text' for txt-only, or leave as 'auto'."
         ),
     )
     return parser.parse_args()
@@ -271,6 +274,7 @@ def translate_paragraphs(paragraphs: list[Paragraph], output_dir: Path, base_nam
     cache_path = translation_cache_path(output_dir=output_dir, base_name=base_name)
     cache = load_translation_cache(cache_path)
     translated: list[Paragraph] = []
+    total = len(paragraphs)
 
     for index, paragraph in enumerate(paragraphs, start=1):
         source_text = paragraph.text
@@ -298,6 +302,8 @@ def translate_paragraphs(paragraphs: list[Paragraph], output_dir: Path, base_nam
                 text=translated_text,
             )
         )
+        if index == 1 or index == total or index % 25 == 0:
+            print(f"  [zh] {index}/{total}", flush=True)
 
     return translated
 
@@ -326,6 +332,16 @@ def load_srt(path: Path) -> list[Cue]:
     return cues
 
 
+def load_txt(path: Path) -> list[Cue]:
+    cues: list[Cue] = []
+    for index, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        text = normalize_line(raw_line)
+        if not text:
+            continue
+        cues.append(Cue(index=index, start_ms=0, end_ms=0, text=text))
+    return cues
+
+
 def dedupe_lines(lines: Iterable[str]) -> list[str]:
     cleaned: list[str] = []
     previous = ""
@@ -344,43 +360,101 @@ def cues_to_raw_lines(cues: Iterable[Cue]) -> list[str]:
     return dedupe_lines(cue.text for cue in cues)
 
 
-def build_paragraphs(cues: list[Cue]) -> list[Paragraph]:
-    paragraphs: list[Paragraph] = []
-    buffer: list[str] = []
-    start_ms = 0
-    end_ms = 0
-    sentence_count = 0
+def ends_with_sentence_boundary(text: str) -> bool:
+    return normalize_line(text).endswith(tuple(SENTENCE_END_CHARS))
 
-    def flush() -> None:
-        nonlocal buffer, start_ms, end_ms, sentence_count
-        text = normalize_line(" ".join(buffer))
+
+def split_completed_sentences(text: str) -> tuple[list[str], str]:
+    normalized = normalize_line(text)
+    if not normalized:
+        return [], ""
+
+    parts = [part.strip() for part in SENTENCE_SPLIT_RE.split(normalized) if part and part.strip()]
+    if not parts:
+        return [], normalized
+
+    if ends_with_sentence_boundary(normalized):
+        return parts, ""
+    return parts[:-1], parts[-1]
+
+
+def build_paragraphs(cues: list[Cue]) -> list[Paragraph]:
+    if not cues:
+        return []
+
+    timestamp_free_source = all(cue.start_ms == 0 and cue.end_ms == 0 for cue in cues)
+    sentence_units: list[Paragraph] = []
+    pending_text = ""
+    sentence_start_ms = 0
+    last_end_ms = 0
+    long_gap_ms = 0 if timestamp_free_source else 2400
+    absolute_sentence_chars = 680 if timestamp_free_source else 1800
+
+    def flush_sentence(text: str, end_ms: int) -> None:
+        nonlocal sentence_start_ms
+        text = normalize_line(text)
         if text:
-            paragraphs.append(Paragraph(start_ms=start_ms, end_ms=end_ms, text=text))
-        buffer = []
-        start_ms = 0
-        end_ms = 0
-        sentence_count = 0
+            sentence_units.append(Paragraph(start_ms=sentence_start_ms, end_ms=end_ms, text=text))
+        sentence_start_ms = 0
 
     for cue in cues:
-        if not buffer:
-            start_ms = cue.start_ms
+        if not pending_text:
+            sentence_start_ms = cue.start_ms
         else:
-            gap_ms = cue.start_ms - end_ms
-            current_text = normalize_line(" ".join(buffer))
-            should_flush = (
-                gap_ms >= 2000
-                or len(current_text) >= 240
-                or (sentence_count >= 3 and current_text.endswith(tuple(SENTENCE_END_CHARS)))
+            gap_ms = cue.start_ms - last_end_ms
+            if gap_ms >= long_gap_ms and len(normalize_line(pending_text)) >= 140:
+                flush_sentence(pending_text, last_end_ms)
+                pending_text = ""
+                sentence_start_ms = cue.start_ms
+
+        pending_text = normalize_line(" ".join(part for part in (pending_text, cue.text) if part))
+        completed_sentences, pending_text = split_completed_sentences(pending_text)
+        for sentence in completed_sentences:
+            flush_sentence(sentence, cue.end_ms)
+            sentence_start_ms = cue.end_ms
+
+        if len(normalize_line(pending_text)) >= absolute_sentence_chars:
+            flush_sentence(pending_text, cue.end_ms)
+            pending_text = ""
+
+        last_end_ms = cue.end_ms
+
+    if pending_text:
+        flush_sentence(pending_text, last_end_ms)
+
+    paragraphs: list[Paragraph] = []
+    paragraph_buffer: list[Paragraph] = []
+    target_chars = 320 if timestamp_free_source else 420
+    preferred_max_chars = 520 if timestamp_free_source else 760
+    max_sentences = 3 if timestamp_free_source else 4
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph_buffer
+        if not paragraph_buffer:
+            return
+        text = normalize_line(" ".join(item.text for item in paragraph_buffer))
+        paragraphs.append(
+            Paragraph(
+                start_ms=paragraph_buffer[0].start_ms,
+                end_ms=paragraph_buffer[-1].end_ms,
+                text=text,
             )
-            if should_flush:
-                flush()
-                start_ms = cue.start_ms
+        )
+        paragraph_buffer = []
 
-        buffer.append(cue.text)
-        end_ms = cue.end_ms
-        sentence_count += sum(ch in SENTENCE_END_CHARS for ch in cue.text)
+    for sentence in sentence_units:
+        candidate_buffer = paragraph_buffer + [sentence]
+        candidate_len = len(normalize_line(" ".join(item.text for item in candidate_buffer)))
+        if paragraph_buffer and (candidate_len > preferred_max_chars or len(candidate_buffer) > max_sentences):
+            flush_paragraph()
+        paragraph_buffer.append(sentence)
+        current_len = len(normalize_line(" ".join(item.text for item in paragraph_buffer)))
+        if current_len >= preferred_max_chars:
+            flush_paragraph()
+        elif len(paragraph_buffer) >= 2 and current_len >= target_chars:
+            flush_paragraph()
 
-    flush()
+    flush_paragraph()
     return paragraphs
 
 
@@ -456,13 +530,16 @@ def write_reading_md(
         ]
 
     for section_index, section in enumerate(sections, start=1):
-        start = format_timestamp(section[0].start_ms)
-        end = format_timestamp(section[-1].end_ms)
-        heading = (
-            f"## Section {section_index} ({start} - {end})"
-            if language == "en"
-            else f"## 第 {section_index} 部分（{start} - {end}）"
-        )
+        if section[0].start_ms == 0 and section[-1].end_ms == 0:
+            heading = f"## Section {section_index}" if language == "en" else f"## 第 {section_index} 部分"
+        else:
+            start = format_timestamp(section[0].start_ms)
+            end = format_timestamp(section[-1].end_ms)
+            heading = (
+                f"## Section {section_index} ({start} - {end})"
+                if language == "en"
+                else f"## 第 {section_index} 部分（{start} - {end}）"
+            )
         lines.extend([heading, ""])
         for paragraph in section:
             lines.extend([paragraph.text, ""])
@@ -545,12 +622,16 @@ def process_input(input_path: Path, whisper_model: str, bootstrap_whisper: bool)
     suffix = input_path.suffix.lower()
     if suffix in SUBTITLE_EXTENSIONS:
         return load_srt(input_path)
+    if suffix in TEXT_EXTENSIONS:
+        return load_txt(input_path)
     if suffix in VIDEO_EXTENSIONS or suffix in AUDIO_EXTENSIONS:
         return transcribe_media_to_cues(input_path, model_name=whisper_model, bootstrap=bootstrap_whisper)
     raise ValueError(f"Unsupported input type: {input_path.suffix}")
 
 
 def allowed_extensions(source_kind: str) -> set[str]:
+    if source_kind == "text":
+        return TEXT_EXTENSIONS
     if source_kind == "subtitle":
         return SUBTITLE_EXTENSIONS
     if source_kind == "audio":
@@ -559,7 +640,7 @@ def allowed_extensions(source_kind: str) -> set[str]:
         return VIDEO_EXTENSIONS
     if source_kind == "media":
         return AUDIO_EXTENSIONS.union(VIDEO_EXTENSIONS)
-    return VIDEO_EXTENSIONS.union(AUDIO_EXTENSIONS, SUBTITLE_EXTENSIONS)
+    return VIDEO_EXTENSIONS.union(AUDIO_EXTENSIONS, SUBTITLE_EXTENSIONS, TEXT_EXTENSIONS)
 
 
 def canonical_base_name(path: Path) -> str:
