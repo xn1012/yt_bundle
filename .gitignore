@@ -3,6 +3,12 @@ __pycache__/
 *.pyc
 
 # Downloaded media
+*.mp3
+*.wav
+*.m4a
+*.aac
+*.flac
+*.ogg
 *.mp4
 *.m4v
 *.mov
