@@ -6,6 +6,7 @@ from pathlib import Path
 from download_youtube_source import (
     DEFAULT_BROWSER_ORDER,
     DEFAULT_SUBTITLE_LANGS,
+    DEFAULT_VIDEO_FORMAT,
     download_youtube,
 )
 from make_transcript_bundle import (
@@ -57,8 +58,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--format",
-        default="bv*+ba/b",
-        help="yt-dlp video format selector. Defaults to bv*+ba/b. For audio downloads, defaults to ba.",
+        default=DEFAULT_VIDEO_FORMAT,
+        help=(
+            "yt-dlp video format selector. Defaults to a 720p cap "
+            f"({DEFAULT_VIDEO_FORMAT}). For audio downloads, defaults to ba."
+        ),
     )
     parser.add_argument(
         "--media-type",

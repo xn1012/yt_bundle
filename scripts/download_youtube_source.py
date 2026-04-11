@@ -10,6 +10,7 @@ from pathlib import Path
 
 DEFAULT_BROWSER_ORDER = ["chrome", "safari", "edge", "firefox", "brave"]
 DEFAULT_SUBTITLE_LANGS = ["zh-Hans", "zh-Hant", "zh", "en", "en-orig"]
+DEFAULT_VIDEO_FORMAT = "bv*[height<=720]+ba/b[height<=720]"
 VIDEO_EXTENSIONS = {".mp4"}
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"}
 AUTH_REQUIRED_RE = re.compile(
@@ -72,8 +73,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--format",
-        default="bv*+ba/b",
-        help="yt-dlp video format selector. Defaults to bv*+ba/b. For audio downloads, defaults to ba.",
+        default=DEFAULT_VIDEO_FORMAT,
+        help=(
+            "yt-dlp video format selector. Defaults to a 720p cap "
+            f"({DEFAULT_VIDEO_FORMAT}). For audio downloads, defaults to ba."
+        ),
     )
     parser.add_argument(
         "--media-type",
@@ -231,10 +235,11 @@ def download_command(
     if media_type == "subtitle":
         command.append("--skip-download")
     else:
+        selected_format = fmt if media_type == "video" else (fmt if fmt != DEFAULT_VIDEO_FORMAT else "ba")
         command.extend(
             [
                 "-f",
-                fmt if media_type == "video" else (fmt if fmt != "bv*+ba/b" else "ba"),
+                selected_format,
             ]
         )
     if media_type == "video":
