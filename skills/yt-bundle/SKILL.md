@@ -1,6 +1,6 @@
 ---
 name: yt-bundle
-description: Download YouTube videos or audio with preferred Chinese or English subtitles, retry protected downloads with browser cookies or cookies.txt, and generate transcript bundles from YouTube links, local video/audio files, subtitle files, or source directories. Use when Codex needs to fetch YouTube material, transcribe videos or audio, turn subtitles into raw transcript txt plus reading and summary markdown, or generate extra Chinese reading and summary outputs for English sources.
+description: Download YouTube videos or audio with preferred Chinese or English subtitles, retry protected downloads with browser cookies or cookies.txt, and generate transcript bundles from YouTube links, local video/audio files, subtitle files, or source directories. Use when Codex needs to fetch YouTube material, transcribe videos or audio, turn subtitles into raw transcript txt plus reading markdown, or generate extra Chinese reading outputs for English sources.
 ---
 
 # Yt Bundle
@@ -25,9 +25,7 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
 - Expect English sources to produce:
   - raw transcript `.txt`
   - source-language reading draft `.md`
-  - source-language minimal summary `.md`
   - Chinese reading draft `.md`
-  - Chinese minimal summary `.md`
 
 ## Commands
 
@@ -59,5 +57,5 @@ python3 scripts/make_transcript_bundle.py "<dir>" --batch --source-kind subtitle
 - Use `--cookies-from-browser chrome` first when YouTube blocks anonymous access and the user has not provided a cookies file.
 - Use `--bootstrap-whisper` only when video transcription is required and no working Whisper runtime is already available.
 - For subtitle-only directory jobs, prefer `--source-kind subtitle` so mixed-in `.mp4` or `.mp3` files do not trigger extra source groups or Whisper transcription.
-- English subtitle sources also generate Chinese reading and summary companions, and that translation step can be much slower than writing the base three files.
+- English subtitle sources also generate Chinese reading companions, and that translation step can be much slower than writing the base transcript plus reading draft.
 - Read [references/workflow.md](references/workflow.md) when you need the exact output conventions or a reminder of which script to call.

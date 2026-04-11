@@ -53,12 +53,10 @@ Base outputs:
 
 - `<stem>.txt`
 - `<stem> 阅读整理稿.md`
-- `<stem> 极简摘要稿.md`
 
 Extra outputs for English sources:
 
 - `<stem> 中文阅读整理稿.md`
-- `<stem> 中文极简摘要稿.md`
 
 ## Guardrails
 
@@ -66,4 +64,4 @@ Extra outputs for English sources:
 - Do not assume YouTube anonymous download will work; be ready to retry with cookies.
 - Prefer the unified script for URL-based requests so download-source selection stays consistent.
 - When a directory contains both subtitles and media files, use `--source-kind subtitle` if the request is based on existing `.srt` files; otherwise the batch pass may also pick up `.mp4`/`.mp3` sources.
-- English subtitle batches still generate Chinese companion outputs, so the translation phase can take much longer than the initial three-file write.
+- English subtitle batches still generate Chinese reading companions, so the translation phase can take much longer than the initial transcript and reading-file write.

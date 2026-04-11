@@ -6,7 +6,7 @@ Utilities for:
 - downloading YouTube audio-only sources for transcription workflows
 - retrying protected downloads with browser cookies or `cookies.txt`
 - generating transcript bundles from local video, audio, or subtitle files
-- generating extra Chinese reading and summary outputs when the source is English
+- generating extra Chinese reading outputs when the source is English
 
 ## What It Does
 
@@ -18,10 +18,8 @@ This repo is built around one practical workflow:
 4. Generate a transcript bundle:
    - raw transcript `.txt`
    - reading draft `.md`
-   - minimal summary `.md`
 5. If the source is English, also generate:
    - Chinese reading draft `.md`
-   - Chinese minimal summary `.md`
 
 ## Requirements
 
@@ -66,7 +64,7 @@ This will:
 - `scripts/download_youtube_source.py`
   Download-only helper with video/audio selection, subtitle selection, and cookie retry logic.
 - `scripts/make_transcript_bundle.py`
-  Generate transcript `.txt`, reading draft `.md`, and minimal summary `.md` from a local video, audio, or `.srt`.
+  Generate transcript `.txt` and reading draft `.md` from a local video, audio, or `.srt`.
 - `scripts/make_bilingual_reading_md.py`
   Older helper for bilingual reading markdown generation.
 
@@ -140,7 +138,7 @@ python3 scripts/make_transcript_bundle.py "/path/to/file.mp4"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp3"
 ```
 
-When the local source is English, this script also writes Chinese reading and summary files.
+When the local source is English, this script also writes a Chinese reading file.
 
 Batch process a directory:
 
@@ -154,12 +152,10 @@ For a source named `Example Video [abc123].mp4` or `Example Video [abc123].en.sr
 
 - `Example Video [abc123].txt`
 - `Example Video [abc123] 阅读整理稿.md`
-- `Example Video [abc123] 极简摘要稿.md`
 
 If the source is English, it also creates:
 
 - `Example Video [abc123] 中文阅读整理稿.md`
-- `Example Video [abc123] 中文极简摘要稿.md`
 
 ## Help
 

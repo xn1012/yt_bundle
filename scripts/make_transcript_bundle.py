@@ -9,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -66,64 +65,6 @@ TRANSLATION_REPLACEMENTS = {
     "quadr": "Claude",
 }
 
-STOPWORDS = {
-    "我們",
-    "你們",
-    "你我",
-    "你們",
-    "這個",
-    "那個",
-    "然後",
-    "就是",
-    "一個",
-    "一些",
-    "如果",
-    "所以",
-    "因為",
-    "不是",
-    "沒有",
-    "可以",
-    "需要",
-    "然後",
-    "自己",
-    "現在",
-    "這裡",
-    "那裡",
-    "其實",
-    "比如",
-    "這樣",
-    "那樣",
-    "還有",
-    "以及",
-    "進行",
-    "完成",
-    "使用",
-    "問題",
-    "用戶",
-    "系統",
-    "這期",
-    "視頻",
-    "一個",
-    "一下",
-    "就是",
-    "可能",
-    "因爲",
-    "所以",
-    "我們就",
-    "一下子",
-    "and",
-    "the",
-    "for",
-    "with",
-    "from",
-    "that",
-    "this",
-    "into",
-    "your",
-    "you",
-}
-
-
 @dataclass
 class Cue:
     index: int
@@ -143,17 +84,15 @@ class Paragraph:
 class BundleStatus:
     raw_exists: bool
     reading_exists: bool
-    summary_exists: bool
     zh_reading_exists: bool = False
-    zh_summary_exists: bool = False
     needs_zh_extras: bool = False
 
     @property
     def complete(self) -> bool:
-        base_complete = self.raw_exists and self.reading_exists and self.summary_exists
+        base_complete = self.raw_exists and self.reading_exists
         if not self.needs_zh_extras:
             return base_complete
-        return base_complete and self.zh_reading_exists and self.zh_summary_exists
+        return base_complete and self.zh_reading_exists
 
 
 @dataclass
@@ -174,7 +113,7 @@ def parse_args() -> argparse.Namespace:
   python3 make_transcript_bundle.py "/path/to/dir" --batch --source-kind subtitle
 """
     parser = argparse.ArgumentParser(
-        description="Generate raw transcript txt, reading markdown, and summary markdown from a video, audio, or subtitle file.",
+        description="Generate raw transcript txt and reading markdown from a video, audio, or subtitle file.",
         epilog=examples,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -192,12 +131,6 @@ def parse_args() -> argparse.Namespace:
         "--bootstrap-whisper",
         action="store_true",
         help="Create a temporary venv and install openai-whisper if no Whisper runtime is found.",
-    )
-    parser.add_argument(
-        "--summary-points",
-        type=int,
-        default=10,
-        help="Number of summary bullets to generate. Defaults to 10.",
     )
     parser.add_argument(
         "--batch",
@@ -479,109 +412,6 @@ def chunk_sections(paragraphs: list[Paragraph]) -> list[list[Paragraph]]:
     return sections
 
 
-def split_sentences(text: str) -> list[str]:
-    text = normalize_line(text)
-    if not text:
-        return []
-
-    parts = re.split(r"(?<=[。！？!?；;\.])\s*", text)
-    sentences = [part.strip() for part in parts if part.strip()]
-    if not sentences:
-        sentences = [text]
-    return sentences
-
-
-def extract_tokens(text: str) -> set[str]:
-    tokens: set[str] = set()
-
-    for match in EN_RE.findall(text.lower()):
-        if match not in STOPWORDS and len(match) > 1:
-            tokens.add(match)
-
-    for chunk in ZH_RE.findall(text):
-        compact = chunk.strip()
-        if len(compact) == 1:
-            continue
-        if len(compact) <= 4:
-            if compact not in STOPWORDS:
-                tokens.add(compact)
-            continue
-        for idx in range(len(compact) - 1):
-            token = compact[idx : idx + 2]
-            if token not in STOPWORDS:
-                tokens.add(token)
-
-    return tokens
-
-
-def build_summary_points(paragraphs: list[Paragraph], count: int) -> list[str]:
-    sentences: list[tuple[int, str, set[str]]] = []
-    for para_idx, paragraph in enumerate(paragraphs):
-        for sentence in split_sentences(paragraph.text):
-            cleaned = sentence.strip(" ，、；：")
-            if len(cleaned) < 10:
-                continue
-            sentences.append((para_idx, cleaned, extract_tokens(cleaned)))
-
-    if not sentences:
-        return []
-
-    frequencies: Counter[str] = Counter()
-    for _, _, tokens in sentences:
-        frequencies.update(tokens)
-
-    scored: list[tuple[float, int, str, set[str]]] = []
-    total = len(sentences)
-    for idx, (para_idx, sentence, tokens) in enumerate(sentences):
-        if not tokens:
-            continue
-        lexical_score = sum(frequencies[token] for token in tokens) / (len(tokens) ** 0.6)
-        position_bonus = 1.0 + (1.0 - idx / total) * 0.35
-        scored.append((lexical_score * position_bonus, idx, sentence, tokens))
-
-    scored.sort(key=lambda item: item[0], reverse=True)
-
-    selected: list[tuple[int, str, set[str]]] = []
-    for _, idx, sentence, tokens in scored:
-        overlap = 0.0
-        for _, _, chosen_tokens in selected:
-            union = tokens | chosen_tokens
-            if not union:
-                continue
-            overlap = max(overlap, len(tokens & chosen_tokens) / len(union))
-        if overlap > 0.72:
-            continue
-        selected.append((idx, sentence, tokens))
-        if len(selected) >= count:
-            break
-
-    if len(selected) < min(count, len(scored)):
-        chosen_indexes = {idx for idx, _, _ in selected}
-        for _, idx, sentence, tokens in scored:
-            if idx in chosen_indexes:
-                continue
-            selected.append((idx, sentence, tokens))
-            if len(selected) >= count:
-                break
-
-    selected.sort(key=lambda item: item[0])
-    bullets: list[str] = []
-    for _, sentence, _ in selected[:count]:
-        normalized = sentence.strip()
-        if len(normalized) > 72:
-            for separator in ("。", "；", "：", "，"):
-                head = normalized.split(separator)[0].strip()
-                if 18 <= len(head) <= 72:
-                    normalized = head
-                    break
-        if len(normalized) > 72:
-            normalized = normalized[:69].rstrip("，、；： ") + "…"
-        if normalized[-1] not in "。！？!?.":  # keep source-language punctuation
-            normalized += "." if detect_language_from_text(normalized) == "en" else "。"
-        bullets.append(normalized)
-    return bullets
-
-
 def write_text(path: Path, lines: list[str]) -> None:
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
@@ -637,43 +467,6 @@ def write_reading_md(
         for paragraph in section:
             lines.extend([paragraph.text, ""])
 
-    write_text(path, lines)
-
-
-def write_summary_md(
-    path: Path,
-    title: str,
-    source_path: Path,
-    bullets: list[str],
-    language: str,
-    translated_from: str | None = None,
-) -> None:
-    if language == "en":
-        lines = [
-            f"# {title} Minimal Summary",
-            "",
-            "This is a compact auto-generated summary for a fast review of the main thread.",
-            "",
-            f"- Source: `{source_path.name}`",
-            f"- Generated: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`",
-            "",
-        ]
-    else:
-        description = "这是一份自动生成的极简摘要，适合快速回看视频主线。"
-        if translated_from == "en":
-            description = "这是一份根据英文原文自动翻译并压缩得到的中文摘要，适合快速回看主线。"
-        lines = [
-            f"# {title} 极简摘要稿",
-            "",
-            description,
-            "",
-            f"- Source: `{source_path.name}`",
-            f"- Generated: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`",
-            "",
-        ]
-    for idx, bullet in enumerate(bullets, start=1):
-        lines.append(f"{idx}. {bullet}")
-        lines.append("")
     write_text(path, lines)
 
 
@@ -803,11 +596,8 @@ def source_priority(path: Path) -> tuple[int, int, str]:
     return (2, 0, path.name.lower())
 
 
-def translated_output_paths(output_dir: Path, base_name: str) -> tuple[Path, Path]:
-    return (
-        output_dir / f"{base_name} 中文阅读整理稿.md",
-        output_dir / f"{base_name} 中文极简摘要稿.md",
-    )
+def translated_output_path(output_dir: Path, base_name: str) -> Path:
+    return output_dir / f"{base_name} 中文阅读整理稿.md"
 
 
 def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> BundleStatus:
@@ -819,14 +609,8 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
         f"{base_name} 阅读版.md",
         f"{base_name} 整理版.md",
     ]
-    summary_names = [
-        f"{base_name} 极简摘要稿.md",
-        f"{base_name} 摘要版.md",
-        f"{base_name} 10条摘要.md",
-    ]
     reading_exists = any((output_dir / name).exists() for name in reading_names)
-    summary_exists = any((output_dir / name).exists() for name in summary_names)
-    zh_reading_path, zh_summary_path = translated_output_paths(output_dir=output_dir, base_name=base_name)
+    zh_reading_path = translated_output_path(output_dir=output_dir, base_name=base_name)
 
     language_hint = infer_language_from_candidates(candidates)
     if language_hint is None and raw_exists:
@@ -836,9 +620,7 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
     return BundleStatus(
         raw_exists=raw_exists,
         reading_exists=reading_exists,
-        summary_exists=summary_exists,
         zh_reading_exists=zh_reading_path.exists(),
-        zh_summary_exists=zh_summary_path.exists(),
         needs_zh_extras=language_hint == "en",
     )
 
@@ -864,11 +646,10 @@ def build_source_groups(directory: Path, output_dir: Path, source_kind: str = "a
     return groups
 
 
-def output_paths(output_dir: Path, base_name: str) -> tuple[Path, Path, Path]:
+def output_paths(output_dir: Path, base_name: str) -> tuple[Path, Path]:
     return (
         output_dir / f"{base_name}.txt",
         output_dir / f"{base_name} 阅读整理稿.md",
-        output_dir / f"{base_name} 极简摘要稿.md",
     )
 
 
@@ -878,11 +659,10 @@ def generate_bundle(
     base_name: str,
     whisper_model: str,
     bootstrap_whisper: bool,
-    summary_points: int,
     status: BundleStatus | None = None,
     language_hint: str | None = None,
 ) -> None:
-    status = status or BundleStatus(raw_exists=False, reading_exists=False, summary_exists=False)
+    status = status or BundleStatus(raw_exists=False, reading_exists=False)
     if status.complete:
         print(f"Skipping complete bundle: {base_name}", flush=True)
         return
@@ -894,11 +674,10 @@ def generate_bundle(
     print(f"[2/4] Building cleaned raw transcript for {base_name}", flush=True)
     raw_lines = cues_to_raw_lines(cues)
     paragraphs = build_paragraphs(cues)
-    summary_bullets = build_summary_points(paragraphs, count=summary_points)
     needs_zh_extras = status.needs_zh_extras or source_language == "en"
 
-    raw_txt_path, reading_md_path, summary_md_path = output_paths(output_dir=output_dir, base_name=base_name)
-    zh_reading_md_path, zh_summary_md_path = translated_output_paths(output_dir=output_dir, base_name=base_name)
+    raw_txt_path, reading_md_path = output_paths(output_dir=output_dir, base_name=base_name)
+    zh_reading_md_path = translated_output_path(output_dir=output_dir, base_name=base_name)
 
     print(f"[3/4] Writing outputs for {base_name}", flush=True)
     if not status.raw_exists:
@@ -913,19 +692,9 @@ def generate_bundle(
             language=source_language,
         )
         print(reading_md_path, flush=True)
-    if not status.summary_exists:
-        write_summary_md(
-            summary_md_path,
-            title=base_name,
-            source_path=input_path,
-            bullets=summary_bullets,
-            language=source_language,
-        )
-        print(summary_md_path, flush=True)
-    if needs_zh_extras and (not status.zh_reading_exists or not status.zh_summary_exists):
+    if needs_zh_extras and not status.zh_reading_exists:
         print(f"Translating English source into Chinese companion outputs for {base_name}", flush=True)
         translated_paragraphs = translate_paragraphs(paragraphs=paragraphs, output_dir=output_dir, base_name=base_name)
-        translated_summary_bullets = build_summary_points(translated_paragraphs, count=summary_points)
     if needs_zh_extras and not status.zh_reading_exists:
         write_reading_md(
             zh_reading_md_path,
@@ -936,16 +705,6 @@ def generate_bundle(
             translated_from="en",
         )
         print(zh_reading_md_path, flush=True)
-    if needs_zh_extras and not status.zh_summary_exists:
-        write_summary_md(
-            zh_summary_md_path,
-            title=base_name,
-            source_path=input_path,
-            bullets=translated_summary_bullets,
-            language="zh",
-            translated_from="en",
-        )
-        print(zh_summary_md_path, flush=True)
 
     print("[4/4] Done", flush=True)
 
@@ -984,7 +743,6 @@ def main() -> int:
                 base_name=group.base_name,
                 whisper_model=args.whisper_model,
                 bootstrap_whisper=args.bootstrap_whisper,
-                summary_points=args.summary_points,
                 status=group.status,
                 language_hint=group.language_hint,
             )
@@ -998,7 +756,6 @@ def main() -> int:
         base_name=canonical_base_name(input_path),
         whisper_model=args.whisper_model,
         bootstrap_whisper=args.bootstrap_whisper,
-        summary_points=args.summary_points,
         language_hint=infer_language_from_path(input_path),
     )
     return 0
