@@ -85,12 +85,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Create a temporary Whisper environment if no runtime is currently available.",
     )
-    parser.add_argument(
-        "--summary-points",
-        type=int,
-        default=10,
-        help="Number of summary bullets to generate. Defaults to 10.",
-    )
     return parser.parse_args()
 
 
@@ -145,7 +139,6 @@ def main() -> int:
         base_name=base_name,
         whisper_model=args.whisper_model,
         bootstrap_whisper=args.bootstrap_whisper,
-        summary_points=args.summary_points,
         status=status,
         language_hint=language_hint,
     )
