@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}
+AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"}
 SUBTITLE_EXTENSIONS = {".srt"}
 LANGUAGE_SUFFIXES = {
     "ar",
@@ -166,16 +167,17 @@ class SourceGroup:
 def parse_args() -> argparse.Namespace:
     examples = """Examples:
   python3 make_transcript_bundle.py "/path/to/video.mp4"
+  python3 make_transcript_bundle.py "/path/to/audio.mp3"
   python3 make_transcript_bundle.py "/path/to/subtitle.srt"
   python3 make_transcript_bundle.py "/path/to/video.mp4" --output-dir "/path/to/output"
   python3 make_transcript_bundle.py "/path/to/dir" --batch
 """
     parser = argparse.ArgumentParser(
-        description="Generate raw transcript txt, reading markdown, and summary markdown from a video or subtitle file.",
+        description="Generate raw transcript txt, reading markdown, and summary markdown from a video, audio, or subtitle file.",
         epilog=examples,
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument("input", help="Path to a video file, subtitle file, or directory")
+    parser.add_argument("input", help="Path to a video file, audio file, subtitle file, or directory")
     parser.add_argument(
         "--output-dir",
         help="Directory for generated files. Defaults to the input file's directory.",
@@ -183,7 +185,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--whisper-model",
         default="small",
-        help="Whisper model name for video transcription. Defaults to 'small'.",
+        help="Whisper model name for video/audio transcription. Defaults to 'small'.",
     )
     parser.add_argument(
         "--bootstrap-whisper",
@@ -706,9 +708,10 @@ def ensure_whisper_python(bootstrap: bool) -> str:
     return python_executable
 
 
-def transcribe_video_to_cues(video_path: Path, model_name: str, bootstrap: bool) -> list[Cue]:
+def transcribe_media_to_cues(media_path: Path, model_name: str, bootstrap: bool) -> list[Cue]:
     whisper_python = ensure_whisper_python(bootstrap=bootstrap)
-    print(f"Transcribing video with Whisper: {video_path.name} (model={model_name})", flush=True)
+    media_kind = "audio" if media_path.suffix.lower() in AUDIO_EXTENSIONS else "video"
+    print(f"Transcribing {media_kind} with Whisper: {media_path.name} (model={model_name})", flush=True)
 
     with tempfile.TemporaryDirectory(prefix="aiwriting_whisper_") as temp_dir:
         run_command(
@@ -716,7 +719,7 @@ def transcribe_video_to_cues(video_path: Path, model_name: str, bootstrap: bool)
                 whisper_python,
                 "-m",
                 "whisper",
-                str(video_path),
+                str(media_path),
                 "--model",
                 model_name,
                 "--task",
@@ -729,7 +732,7 @@ def transcribe_video_to_cues(video_path: Path, model_name: str, bootstrap: bool)
                 temp_dir,
             ]
         )
-        srt_path = Path(temp_dir) / f"{video_path.stem}.srt"
+        srt_path = Path(temp_dir) / f"{media_path.stem}.srt"
         if not srt_path.exists():
             raise RuntimeError(f"Whisper finished but did not produce expected srt file: {srt_path}")
         return load_srt(srt_path)
@@ -739,8 +742,8 @@ def process_input(input_path: Path, whisper_model: str, bootstrap_whisper: bool)
     suffix = input_path.suffix.lower()
     if suffix in SUBTITLE_EXTENSIONS:
         return load_srt(input_path)
-    if suffix in VIDEO_EXTENSIONS:
-        return transcribe_video_to_cues(input_path, model_name=whisper_model, bootstrap=bootstrap_whisper)
+    if suffix in VIDEO_EXTENSIONS or suffix in AUDIO_EXTENSIONS:
+        return transcribe_media_to_cues(input_path, model_name=whisper_model, bootstrap=bootstrap_whisper)
     raise ValueError(f"Unsupported input type: {input_path.suffix}")
 
 
@@ -756,7 +759,7 @@ def canonical_base_name(path: Path) -> str:
 
 
 def is_supported_source(path: Path) -> bool:
-    return path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS.union(SUBTITLE_EXTENSIONS)
+    return path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS.union(AUDIO_EXTENSIONS, SUBTITLE_EXTENSIONS)
 
 
 def source_priority(path: Path) -> tuple[int, int, str]:
@@ -773,7 +776,9 @@ def source_priority(path: Path) -> tuple[int, int, str]:
             "en-orig": 6,
         }
         return (0, language_order.get(language, 50), path.name.lower())
-    return (1, 0, path.name.lower())
+    if suffix in AUDIO_EXTENSIONS:
+        return (1, 0, path.name.lower())
+    return (2, 0, path.name.lower())
 
 
 def translated_output_paths(output_dir: Path, base_name: str) -> tuple[Path, Path]:

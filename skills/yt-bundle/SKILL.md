@@ -1,6 +1,6 @@
 ---
 name: yt-bundle
-description: Download YouTube videos with preferred Chinese or English subtitles, retry protected downloads with browser cookies or cookies.txt, and generate transcript bundles from YouTube links, local video files, subtitle files, or source directories. Use when Codex needs to fetch YouTube material, transcribe videos, turn subtitles into raw transcript txt plus reading and summary markdown, or generate extra Chinese reading and summary outputs for English sources.
+description: Download YouTube videos or audio with preferred Chinese or English subtitles, retry protected downloads with browser cookies or cookies.txt, and generate transcript bundles from YouTube links, local video/audio files, subtitle files, or source directories. Use when Codex needs to fetch YouTube material, transcribe videos or audio, turn subtitles into raw transcript txt plus reading and summary markdown, or generate extra Chinese reading and summary outputs for English sources.
 ---
 
 # Yt Bundle
@@ -10,15 +10,16 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
 ## Quick Decision
 
 - If the user gives a YouTube URL and wants the whole workflow, run `scripts/yt_bundle.py` from the repository root.
+- If the user gives a YouTube URL and wants audio-only download or audio-based transcription, run `scripts/yt_bundle.py --media-type audio` or `scripts/download_youtube_source.py --media-type audio`.
 - If the user gives a YouTube URL and wants download only, run `scripts/download_youtube_source.py`.
-- If the user gives a local video file or subtitle file, run `scripts/make_transcript_bundle.py`.
+- If the user gives a local video file, audio file, or subtitle file, run `scripts/make_transcript_bundle.py`.
 - If the user gives a directory and wants missing bundles filled in, run `scripts/make_transcript_bundle.py <dir> --batch`.
 
 ## Default Behavior
 
 - Write outputs into the user-requested directory. If none is given, use the current working directory.
 - Prefer Chinese subtitles over English subtitles when both exist.
-- Fall back to video transcription when subtitles are unavailable.
+- Fall back to video or audio transcription when subtitles are unavailable.
 - Preserve existing downloaded media and generated outputs unless the user explicitly asks to delete or overwrite.
 - Expect English sources to produce:
   - raw transcript `.txt`
@@ -33,18 +34,20 @@ Run the unified workflow:
 
 ```bash
 python3 scripts/yt_bundle.py "<youtube-url>" [--output-dir "<dir>"] [--cookies-from-browser chrome]
+python3 scripts/yt_bundle.py "<youtube-url>" --media-type audio [--output-dir "<dir>"] [--cookies-from-browser chrome]
 ```
 
 Run download only:
 
 ```bash
 python3 scripts/download_youtube_source.py "<youtube-url>" [--output-dir "<dir>"] [--cookies-from-browser chrome]
+python3 scripts/download_youtube_source.py "<youtube-url>" --media-type audio [--output-dir "<dir>"] [--cookies-from-browser chrome]
 ```
 
 Run local bundle generation:
 
 ```bash
-python3 scripts/make_transcript_bundle.py "<video-or-srt-path>" [--output-dir "<dir>"]
+python3 scripts/make_transcript_bundle.py "<video-audio-or-srt-path>" [--output-dir "<dir>"]
 python3 scripts/make_transcript_bundle.py "<dir>" --batch
 ```
 

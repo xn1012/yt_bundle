@@ -57,6 +57,9 @@ def install_skill(source_root: Path, target_root: Path, skill_name: str, force: 
     source_dir = source_root / skill_name
     if not source_dir.exists():
         raise FileNotFoundError(f"Skill source not found: {source_dir}")
+    scripts_dir = REPO_ROOT / "scripts"
+    if not scripts_dir.exists():
+        raise FileNotFoundError(f"Repository scripts directory not found: {scripts_dir}")
 
     target_root.mkdir(parents=True, exist_ok=True)
     target_dir = target_root / skill_name
@@ -71,6 +74,12 @@ def install_skill(source_root: Path, target_root: Path, skill_name: str, force: 
         print(f"Backed up existing skill to: {backup_dir}")
 
     shutil.copytree(source_dir, target_dir)
+    shutil.copytree(
+        scripts_dir,
+        target_dir / "scripts",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        dirs_exist_ok=True,
+    )
     return target_dir
 
 

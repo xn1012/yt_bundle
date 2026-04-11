@@ -10,6 +10,8 @@ from pathlib import Path
 
 DEFAULT_BROWSER_ORDER = ["chrome", "safari", "edge", "firefox", "brave"]
 DEFAULT_SUBTITLE_LANGS = ["zh-Hans", "zh-Hant", "zh", "en", "en-orig"]
+VIDEO_EXTENSIONS = {".mp4"}
+AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"}
 AUTH_REQUIRED_RE = re.compile(
     r"(sign in to confirm you.?re not a bot|use --cookies-from-browser|login required|cookies|age-restricted)",
     re.IGNORECASE,
@@ -23,9 +25,11 @@ class DownloadResult:
     video_id: str
     title: str
     video_path: Path | None
+    audio_path: Path | None
     subtitle_paths: list[Path]
     selected_subtitle_languages: list[str]
     used_auth: str
+    media_type: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,9 +38,10 @@ def parse_args() -> argparse.Namespace:
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --output-dir "/path/to/output"
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --cookies-from-browser chrome
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --prefer-subtitle-langs "zh-Hans,zh-Hant,zh,en,en-orig"
+  python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type audio
 """
     parser = argparse.ArgumentParser(
-        description="Download a YouTube video plus preferred English/Chinese subtitles with cookie-based retries.",
+        description="Download YouTube video or audio plus preferred English/Chinese subtitles with cookie-based retries.",
         epilog=examples,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -44,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         default=".",
-        help="Directory to save the video and subtitle files. Defaults to the current directory.",
+        help="Directory to save the media and subtitle files. Defaults to the current directory.",
     )
     parser.add_argument(
         "--cookies",
@@ -67,7 +72,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--format",
         default="bv*+ba/b",
-        help="yt-dlp format selector. Defaults to bv*+ba/b.",
+        help="yt-dlp video format selector. Defaults to bv*+ba/b. For audio downloads, defaults to ba.",
+    )
+    parser.add_argument(
+        "--media-type",
+        choices=("video", "audio"),
+        default="video",
+        help="Download video or audio. Defaults to video.",
+    )
+    parser.add_argument(
+        "--audio-format",
+        default="mp3",
+        help="Audio format used with --media-type audio. Defaults to mp3.",
     )
     parser.add_argument(
         "--js-runtime",
@@ -196,6 +212,8 @@ def download_command(
     url: str,
     output_dir: Path,
     fmt: str,
+    media_type: str,
+    audio_format: str,
     js_runtime: str,
     auth_args: list[str],
     subtitle_languages: list[str],
@@ -205,14 +223,16 @@ def download_command(
         "--js-runtimes",
         js_runtime,
         "-f",
-        fmt,
-        "--merge-output-format",
-        "mp4",
+        fmt if media_type == "video" else (fmt if fmt != "bv*+ba/b" else "ba"),
         "-o",
         "%(title)s [%(id)s].%(ext)s",
         "-P",
         str(output_dir),
     ]
+    if media_type == "video":
+        command.extend(["--merge-output-format", "mp4"])
+    else:
+        command.extend(["-x", "--audio-format", audio_format])
     if subtitle_languages:
         command.extend(
             [
@@ -231,26 +251,32 @@ def download_command(
     return command
 
 
-def find_downloaded_files(output_dir: Path, video_id: str) -> tuple[Path | None, list[Path]]:
+def find_downloaded_files(output_dir: Path, video_id: str) -> tuple[Path | None, Path | None, list[Path]]:
     marker = f"[{video_id}]"
     video_path: Path | None = None
+    audio_path: Path | None = None
     subtitle_paths: list[Path] = []
 
     for path in sorted(output_dir.iterdir()):
         if not path.is_file() or marker not in path.name or path.name.endswith(".part"):
             continue
-        if path.suffix.lower() == ".mp4":
+        suffix = path.suffix.lower()
+        if suffix in VIDEO_EXTENSIONS:
             video_path = path
-        elif path.suffix.lower() == ".srt":
+        elif suffix in AUDIO_EXTENSIONS:
+            audio_path = path
+        elif suffix == ".srt":
             subtitle_paths.append(path)
 
-    return video_path, subtitle_paths
+    return video_path, audio_path, subtitle_paths
 
 
 def download_youtube(
     url: str,
     output_dir: Path,
     fmt: str,
+    media_type: str,
+    audio_format: str,
     js_runtime: str,
     cookies_path: str | None,
     cookies_from_browser: str | None,
@@ -279,6 +305,8 @@ def download_youtube(
             url=url,
             output_dir=output_dir,
             fmt=fmt,
+            media_type=media_type,
+            audio_format=audio_format,
             js_runtime=js_runtime,
             auth_args=auth_args,
             subtitle_languages=selected_subtitle_languages,
@@ -289,7 +317,7 @@ def download_youtube(
 
     video_id = metadata.get("id")
     title = metadata.get("title") or video_id or "downloaded-video"
-    video_path, subtitle_paths = find_downloaded_files(output_dir=output_dir, video_id=video_id)
+    video_path, audio_path, subtitle_paths = find_downloaded_files(output_dir=output_dir, video_id=video_id)
 
     return DownloadResult(
         url=url,
@@ -297,9 +325,11 @@ def download_youtube(
         video_id=video_id,
         title=title,
         video_path=video_path,
+        audio_path=audio_path,
         subtitle_paths=subtitle_paths,
         selected_subtitle_languages=selected_subtitle_languages,
         used_auth=used_auth,
+        media_type=media_type,
     )
 
 
@@ -313,6 +343,8 @@ def main() -> int:
         url=args.url,
         output_dir=output_dir,
         fmt=args.format,
+        media_type=args.media_type,
+        audio_format=args.audio_format,
         js_runtime=args.js_runtime,
         cookies_path=args.cookies,
         cookies_from_browser=args.cookies_from_browser,
@@ -323,11 +355,14 @@ def main() -> int:
     print(f"Title: {result.title}")
     print(f"Video ID: {result.video_id}")
     print(f"Auth: {result.used_auth}")
+    print(f"Media type: {result.media_type}")
     print(f"Requested subtitle langs: {', '.join(result.selected_subtitle_languages) or 'none'}")
     if result.video_path is not None:
         print(result.video_path)
-    else:
-        print("Video file not found after download.")
+    if result.audio_path is not None:
+        print(result.audio_path)
+    if result.video_path is None and result.audio_path is None:
+        print("Media file not found after download.")
     for subtitle_path in result.subtitle_paths:
         print(subtitle_path)
     return 0

@@ -23,9 +23,10 @@ def parse_args() -> argparse.Namespace:
   python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --output-dir "/path/to/output"
   python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --cookies-from-browser chrome
   python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --cookies /path/to/cookies.txt
+  python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type audio
 """
     parser = argparse.ArgumentParser(
-        description="Download a YouTube video, choose the best available subtitle/video source, and generate the transcript bundle.",
+        description="Download a YouTube video or audio source, choose the best available subtitle/media source, and generate the transcript bundle.",
         epilog=examples,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -56,7 +57,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--format",
         default="bv*+ba/b",
-        help="yt-dlp format selector. Defaults to bv*+ba/b.",
+        help="yt-dlp video format selector. Defaults to bv*+ba/b. For audio downloads, defaults to ba.",
+    )
+    parser.add_argument(
+        "--media-type",
+        choices=("video", "audio"),
+        default="video",
+        help="Download video or audio before bundle generation. Defaults to video.",
+    )
+    parser.add_argument(
+        "--audio-format",
+        default="mp3",
+        help="Audio format used with --media-type audio. Defaults to mp3.",
     )
     parser.add_argument(
         "--js-runtime",
@@ -82,12 +94,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def choose_processing_source(video_path: Path | None, subtitle_paths: list[Path]) -> tuple[Path, list[Path]]:
+def choose_processing_source(
+    video_path: Path | None,
+    audio_path: Path | None,
+    subtitle_paths: list[Path],
+) -> tuple[Path, list[Path]]:
     candidates = list(subtitle_paths)
+    if audio_path is not None:
+        candidates.append(audio_path)
     if video_path is not None:
         candidates.append(video_path)
     if not candidates:
-        raise RuntimeError("Download finished but no video or subtitle source was found for bundle generation.")
+        raise RuntimeError("Download finished but no video, audio, or subtitle source was found for bundle generation.")
     return min(candidates, key=source_priority), candidates
 
 
@@ -102,6 +120,8 @@ def main() -> int:
         url=args.url,
         output_dir=output_dir,
         fmt=args.format,
+        media_type=args.media_type,
+        audio_format=args.audio_format,
         js_runtime=args.js_runtime,
         cookies_path=args.cookies,
         cookies_from_browser=args.cookies_from_browser,
@@ -111,6 +131,7 @@ def main() -> int:
 
     source_path, candidates = choose_processing_source(
         video_path=result.video_path,
+        audio_path=result.audio_path,
         subtitle_paths=result.subtitle_paths,
     )
     base_name = canonical_base_name(source_path)

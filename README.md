@@ -3,17 +3,18 @@
 Utilities for:
 
 - downloading YouTube videos with preferred Chinese or English subtitles
+- downloading YouTube audio-only sources for transcription workflows
 - retrying protected downloads with browser cookies or `cookies.txt`
-- generating transcript bundles from local video or subtitle files
+- generating transcript bundles from local video, audio, or subtitle files
 - generating extra Chinese reading and summary outputs when the source is English
 
 ## What It Does
 
 This repo is built around one practical workflow:
 
-1. Download a YouTube video.
+1. Download a YouTube video or audio source.
 2. Prefer Chinese subtitles when available, otherwise prefer English subtitles.
-3. Fall back to video transcription when subtitles are unavailable.
+3. Fall back to video or audio transcription when subtitles are unavailable.
 4. Generate a transcript bundle:
    - raw transcript `.txt`
    - reading draft `.md`
@@ -38,6 +39,7 @@ Notes:
 
 - `yt-dlp` is used for downloading video and subtitle sources.
 - `openai-whisper` is used when the pipeline must transcribe from video.
+- `ffmpeg` is required by `yt-dlp` audio extraction and Whisper media handling.
 - `requests` is used by the older bilingual helper script.
 
 ## Recommended Entry Point
@@ -50,21 +52,21 @@ python3 scripts/yt_bundle.py "https://www.youtube.com/watch?v=VIDEO_ID"
 
 This will:
 
-- download the video
+- download the video by default
 - try to fetch subtitles
-- choose the best available processing source
+- choose the best available processing source, falling back to media transcription
 - generate the bundle automatically
 
 ## Scripts
 
 - `scripts/yt_bundle.py`
-  Unified entry point. Download a YouTube link, choose the best available subtitle or video source, and generate the bundle.
+  Unified entry point. Download a YouTube link, choose the best available subtitle, audio, or video source, and generate the bundle.
 - `scripts/process_youtube_bundle.py`
   Full pipeline entry point used by `yt_bundle.py`.
 - `scripts/download_youtube_source.py`
-  Download-only helper with subtitle selection and cookie retry logic.
+  Download-only helper with video/audio selection, subtitle selection, and cookie retry logic.
 - `scripts/make_transcript_bundle.py`
-  Generate transcript `.txt`, reading draft `.md`, and minimal summary `.md` from a local video or `.srt`.
+  Generate transcript `.txt`, reading draft `.md`, and minimal summary `.md` from a local video, audio, or `.srt`.
 - `scripts/make_bilingual_reading_md.py`
   Older helper for bilingual reading markdown generation.
 
@@ -76,7 +78,7 @@ The repository also tracks the Codex skill metadata for this workflow:
 - `skills/yt-bundle/agents/openai.yaml`
 - `skills/yt-bundle/references/workflow.md`
 
-The live auto-discovered local skill can be installed under `~/.codex/skills/yt-bundle`. The repository keeps the trigger text, UI metadata, and workflow reference in version control alongside the scripts.
+The live auto-discovered local skill can be installed under `~/.codex/skills/yt-bundle`. The installer copies the repository-backed skill metadata and the current `scripts/` helpers into that live skill directory.
 
 Install the tracked skill into your local Codex skills directory:
 
@@ -110,6 +112,12 @@ Use browser cookies when YouTube blocks anonymous requests:
 python3 scripts/yt_bundle.py "https://www.youtube.com/watch?v=VIDEO_ID" --cookies-from-browser chrome
 ```
 
+Download audio instead of video before generating the bundle:
+
+```bash
+python3 scripts/yt_bundle.py "https://www.youtube.com/watch?v=VIDEO_ID" --media-type audio --cookies-from-browser chrome
+```
+
 Use a `cookies.txt` file:
 
 ```bash
@@ -124,11 +132,12 @@ python3 scripts/yt_bundle.py "https://www.youtube.com/watch?v=VIDEO_ID" --output
 
 ## Local Source Processing
 
-Generate from an existing local subtitle or video:
+Generate from an existing local subtitle, video, or audio file:
 
 ```bash
 python3 scripts/make_transcript_bundle.py "/path/to/file.srt"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp4"
+python3 scripts/make_transcript_bundle.py "/path/to/file.mp3"
 ```
 
 When the local source is English, this script also writes Chinese reading and summary files.

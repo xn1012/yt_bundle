@@ -6,6 +6,7 @@ Use `scripts/yt_bundle.py` for the normal end-to-end case:
 
 ```bash
 python3 scripts/yt_bundle.py "<youtube-url>" --output-dir "<dir>"
+python3 scripts/yt_bundle.py "<youtube-url>" --media-type audio --output-dir "<dir>"
 ```
 
 Add cookies when needed:
@@ -17,19 +18,21 @@ python3 scripts/yt_bundle.py "<youtube-url>" --output-dir "<dir>" --cookies /pat
 
 ## Download Only
 
-Use `scripts/download_youtube_source.py` when the user only wants video and subtitle files.
+Use `scripts/download_youtube_source.py` when the user only wants video/audio and subtitle files.
 
 Behavior:
 
 - prefer `zh-Hans`, `zh-Hant`, `zh`
 - then prefer `en`, `en-orig`
 - retry protected downloads with cookies
+- use `--media-type audio` when the user asks to download audio only
 
 ## Local Bundle Generation
 
 Use `scripts/make_transcript_bundle.py` for:
 
 - a local `.mp4`, `.mov`, `.mkv`, `.webm`, or similar video file
+- a local `.mp3`, `.m4a`, `.wav`, `.flac`, `.opus`, or similar audio file
 - a local `.srt`
 - a directory that should be batch processed
 
@@ -38,6 +41,7 @@ Examples:
 ```bash
 python3 scripts/make_transcript_bundle.py "/path/to/file.srt"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp4"
+python3 scripts/make_transcript_bundle.py "/path/to/file.mp3"
 python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch
 ```
 
