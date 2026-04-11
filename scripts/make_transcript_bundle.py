@@ -171,6 +171,7 @@ def parse_args() -> argparse.Namespace:
   python3 make_transcript_bundle.py "/path/to/subtitle.srt"
   python3 make_transcript_bundle.py "/path/to/video.mp4" --output-dir "/path/to/output"
   python3 make_transcript_bundle.py "/path/to/dir" --batch
+  python3 make_transcript_bundle.py "/path/to/dir" --batch --source-kind subtitle
 """
     parser = argparse.ArgumentParser(
         description="Generate raw transcript txt, reading markdown, and summary markdown from a video, audio, or subtitle file.",
@@ -202,6 +203,15 @@ def parse_args() -> argparse.Namespace:
         "--batch",
         action="store_true",
         help="Treat the input path as a directory and batch-process unhandled files inside it.",
+    )
+    parser.add_argument(
+        "--source-kind",
+        choices=("auto", "subtitle", "audio", "video", "media"),
+        default="auto",
+        help=(
+            "Limit which source files are considered. "
+            "Use 'subtitle' for SRT-only batch runs, 'media' for audio+video only, or leave as 'auto'."
+        ),
     )
     return parser.parse_args()
 
@@ -747,19 +757,31 @@ def process_input(input_path: Path, whisper_model: str, bootstrap_whisper: bool)
     raise ValueError(f"Unsupported input type: {input_path.suffix}")
 
 
+def allowed_extensions(source_kind: str) -> set[str]:
+    if source_kind == "subtitle":
+        return SUBTITLE_EXTENSIONS
+    if source_kind == "audio":
+        return AUDIO_EXTENSIONS
+    if source_kind == "video":
+        return VIDEO_EXTENSIONS
+    if source_kind == "media":
+        return AUDIO_EXTENSIONS.union(VIDEO_EXTENSIONS)
+    return VIDEO_EXTENSIONS.union(AUDIO_EXTENSIONS, SUBTITLE_EXTENSIONS)
+
+
 def canonical_base_name(path: Path) -> str:
-    stem = path.stem
+    stem = path.stem.strip()
     if path.suffix.lower() not in SUBTITLE_EXTENSIONS:
         return stem
 
     prefix, dot, maybe_lang = stem.rpartition(".")
     if dot and maybe_lang.lower() in LANGUAGE_SUFFIXES:
-        return prefix
+        return prefix.strip()
     return stem
 
 
-def is_supported_source(path: Path) -> bool:
-    return path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS.union(AUDIO_EXTENSIONS, SUBTITLE_EXTENSIONS)
+def is_supported_source(path: Path, source_kind: str = "auto") -> bool:
+    return path.is_file() and path.suffix.lower() in allowed_extensions(source_kind)
 
 
 def source_priority(path: Path) -> tuple[int, int, str]:
@@ -821,10 +843,10 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
     )
 
 
-def build_source_groups(directory: Path, output_dir: Path) -> list[SourceGroup]:
+def build_source_groups(directory: Path, output_dir: Path, source_kind: str = "auto") -> list[SourceGroup]:
     grouped: dict[str, list[Path]] = {}
     for path in sorted(directory.iterdir()):
-        if path.name.startswith(".") or not is_supported_source(path):
+        if path.name.startswith(".") or not is_supported_source(path, source_kind=source_kind):
             continue
         grouped.setdefault(canonical_base_name(path), []).append(path)
 
@@ -934,6 +956,11 @@ def main() -> int:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
+    if input_path.is_file() and not is_supported_source(input_path, source_kind=args.source_kind):
+        raise ValueError(
+            f"Input file {input_path.name} does not match --source-kind {args.source_kind!r}"
+        )
+
     default_output_dir = input_path if input_path.is_dir() else input_path.parent
     output_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else default_output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -942,7 +969,7 @@ def main() -> int:
         if not input_path.is_dir():
             raise ValueError("--batch requires a directory input")
 
-        groups = build_source_groups(directory=input_path, output_dir=output_dir)
+        groups = build_source_groups(directory=input_path, output_dir=output_dir, source_kind=args.source_kind)
         pending = [group for group in groups if not group.status.complete]
         print(f"Found {len(groups)} candidate source groups, {len(pending)} pending", flush=True)
         for index, group in enumerate(pending, start=1):

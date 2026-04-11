@@ -35,6 +35,7 @@ Use `scripts/make_transcript_bundle.py` for:
 - a local `.mp3`, `.m4a`, `.wav`, `.flac`, `.opus`, or similar audio file
 - a local `.srt`
 - a directory that should be batch processed
+- a mixed directory where only subtitle files should be processed via `--source-kind subtitle`
 
 Examples:
 
@@ -43,6 +44,7 @@ python3 scripts/make_transcript_bundle.py "/path/to/file.srt"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp4"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp3"
 python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch
+python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch --source-kind subtitle
 ```
 
 ## Output Conventions
@@ -63,3 +65,5 @@ Extra outputs for English sources:
 - Do not delete existing media or generated outputs unless the user explicitly asks.
 - Do not assume YouTube anonymous download will work; be ready to retry with cookies.
 - Prefer the unified script for URL-based requests so download-source selection stays consistent.
+- When a directory contains both subtitles and media files, use `--source-kind subtitle` if the request is based on existing `.srt` files; otherwise the batch pass may also pick up `.mp4`/`.mp3` sources.
+- English subtitle batches still generate Chinese companion outputs, so the translation phase can take much longer than the initial three-file write.

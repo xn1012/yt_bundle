@@ -14,6 +14,7 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
 - If the user gives a YouTube URL and wants download only, run `scripts/download_youtube_source.py`.
 - If the user gives a local video file, audio file, or subtitle file, run `scripts/make_transcript_bundle.py`.
 - If the user gives a directory and wants missing bundles filled in, run `scripts/make_transcript_bundle.py <dir> --batch`.
+- If the user specifically wants to process only subtitle files inside a mixed directory, run `scripts/make_transcript_bundle.py <dir> --batch --source-kind subtitle`.
 
 ## Default Behavior
 
@@ -49,6 +50,7 @@ Run local bundle generation:
 ```bash
 python3 scripts/make_transcript_bundle.py "<video-audio-or-srt-path>" [--output-dir "<dir>"]
 python3 scripts/make_transcript_bundle.py "<dir>" --batch
+python3 scripts/make_transcript_bundle.py "<dir>" --batch --source-kind subtitle
 ```
 
 ## Working Notes
@@ -56,4 +58,6 @@ python3 scripts/make_transcript_bundle.py "<dir>" --batch
 - Use `-h` on any bundled script if options are unclear.
 - Use `--cookies-from-browser chrome` first when YouTube blocks anonymous access and the user has not provided a cookies file.
 - Use `--bootstrap-whisper` only when video transcription is required and no working Whisper runtime is already available.
+- For subtitle-only directory jobs, prefer `--source-kind subtitle` so mixed-in `.mp4` or `.mp3` files do not trigger extra source groups or Whisper transcription.
+- English subtitle sources also generate Chinese reading and summary companions, and that translation step can be much slower than writing the base three files.
 - Read [references/workflow.md](references/workflow.md) when you need the exact output conventions or a reminder of which script to call.
