@@ -5,7 +5,7 @@ Utilities for:
 - downloading YouTube videos with preferred Chinese or English subtitles
 - downloading YouTube audio-only sources for transcription workflows
 - retrying protected downloads with browser cookies or `cookies.txt`
-- generating transcript bundles from local video, audio, or subtitle files
+- generating transcript bundles from local video, audio, subtitle, or transcript txt files
 - generating extra Chinese reading outputs when the source is English
 
 ## What It Does
@@ -16,7 +16,7 @@ This repo is built around one practical workflow:
 2. Prefer English subtitles when available, then Chinese subtitles.
 3. Fall back to video or audio transcription when subtitles are unavailable.
 4. Generate a transcript bundle:
-   - raw transcript `.txt`
+   - subtitle `.srt`
    - reading draft `.md`
 5. If the source is English, also generate:
    - Chinese reading draft `.md`
@@ -55,6 +55,8 @@ This will:
 - choose the best available processing source, falling back to media transcription
 - generate the bundle automatically
 
+In the normal workflow, `.srt` is the retained intermediate artifact. If the pipeline must transcribe from video or audio, Whisper output is persisted as `.srt` and the reading drafts are generated from that subtitle timeline. A local `.txt` is treated as a compatibility input rather than the primary source of truth.
+
 ## Scripts
 
 - `scripts/yt_bundle.py`
@@ -64,7 +66,7 @@ This will:
 - `scripts/download_youtube_source.py`
   Download-only helper with video/audio selection, subtitle selection, and cookie retry logic.
 - `scripts/make_transcript_bundle.py`
-  Generate transcript `.txt` and reading draft `.md` from a local video, audio, or `.srt`.
+  Generate subtitle `.srt` when needed plus reading draft `.md` from a local video, audio, `.srt`, or transcript `.txt`.
 - `scripts/make_bilingual_reading_md.py`
   Older helper for bilingual reading markdown generation.
 
@@ -130,15 +132,20 @@ python3 scripts/yt_bundle.py "https://www.youtube.com/watch?v=VIDEO_ID" --output
 
 ## Local Source Processing
 
-Generate from an existing local subtitle, video, or audio file:
+Generate from an existing local subtitle, video, audio, or transcript txt file:
 
 ```bash
 python3 scripts/make_transcript_bundle.py "/path/to/file.srt"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp4"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp3"
+python3 scripts/make_transcript_bundle.py "/path/to/file.txt"
 ```
 
 When the local source is English, this script also writes a Chinese reading file.
+
+When the local source is video or audio, the script persists Whisper output as a same-basename `.srt` beside the final reading drafts.
+
+When the local source is a `.txt` file, the script will look for a same-basename companion `.srt` in the same directory and reuse that subtitle timing for section headings. This is a compatibility path; the standard workflow should preserve `.srt` rather than relying on `.txt`.
 
 Batch process a directory:
 
@@ -150,7 +157,7 @@ python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch
 
 For a source named `Example Video [abc123].mp4` or `Example Video [abc123].en.srt`, the bundle generator creates:
 
-- `Example Video [abc123].txt`
+- `Example Video [abc123].srt` when transcription from media is required
 - `Example Video [abc123] 阅读整理稿.md`
 
 If the source is English, it also creates:

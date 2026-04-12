@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +14,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -84,14 +85,14 @@ class Paragraph:
 
 @dataclass
 class BundleStatus:
-    raw_exists: bool
+    source_exists: bool
     reading_exists: bool
     zh_reading_exists: bool = False
     needs_zh_extras: bool = False
 
     @property
     def complete(self) -> bool:
-        base_complete = self.raw_exists and self.reading_exists
+        base_complete = self.source_exists and self.reading_exists
         if not self.needs_zh_extras:
             return base_complete
         return base_complete and self.zh_reading_exists
@@ -105,6 +106,14 @@ class SourceGroup:
     language_hint: str | None = None
 
 
+@dataclass
+class ProcessingResult:
+    cues: list[Cue]
+    source_path: Path
+    generated_subtitle_path: Path | None = None
+    reference_cues: list[Cue] | None = None
+
+
 def parse_args() -> argparse.Namespace:
     examples = """Examples:
   python3 make_transcript_bundle.py "/path/to/video.mp4"
@@ -116,7 +125,7 @@ def parse_args() -> argparse.Namespace:
   python3 make_transcript_bundle.py "/path/to/dir" --batch --source-kind subtitle
 """
     parser = argparse.ArgumentParser(
-        description="Generate raw transcript txt and reading markdown from a video, audio, subtitle, or transcript txt file.",
+        description="Generate reading markdown from a video, audio, subtitle, or transcript txt file.",
         epilog=examples,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -342,24 +351,6 @@ def load_txt(path: Path) -> list[Cue]:
     return cues
 
 
-def dedupe_lines(lines: Iterable[str]) -> list[str]:
-    cleaned: list[str] = []
-    previous = ""
-    for raw in lines:
-        line = normalize_line(raw)
-        if not line:
-            continue
-        if line == previous:
-            continue
-        cleaned.append(line)
-        previous = line
-    return cleaned
-
-
-def cues_to_raw_lines(cues: Iterable[Cue]) -> list[str]:
-    return dedupe_lines(cue.text for cue in cues)
-
-
 def ends_with_sentence_boundary(text: str) -> bool:
     return normalize_line(text).endswith(tuple(SENTENCE_END_CHARS))
 
@@ -458,6 +449,54 @@ def build_paragraphs(cues: list[Cue]) -> list[Paragraph]:
     return paragraphs
 
 
+def paragraph_weights(paragraphs: list[Paragraph]) -> list[int]:
+    return [max(len(normalize_line(paragraph.text)), 1) for paragraph in paragraphs]
+
+
+def cues_as_paragraphs(cues: list[Cue]) -> list[Paragraph]:
+    return [Paragraph(start_ms=cue.start_ms, end_ms=cue.end_ms, text=cue.text) for cue in cues]
+
+
+def reanchor_paragraph_times(paragraphs: list[Paragraph], reference_units: list[Paragraph]) -> list[Paragraph]:
+    if not paragraphs or not reference_units:
+        return paragraphs
+    if all(paragraph.start_ms == 0 and paragraph.end_ms == 0 for paragraph in reference_units):
+        return paragraphs
+
+    reference_weights = paragraph_weights(reference_units)
+    paragraph_weights_local = paragraph_weights(paragraphs)
+    reference_breakpoints: list[int] = []
+    running_total = 0
+    for weight in reference_weights:
+        running_total += weight
+        reference_breakpoints.append(running_total)
+
+    total_reference = reference_breakpoints[-1]
+    total_target = sum(paragraph_weights_local)
+    consumed = 0
+    anchored: list[Paragraph] = []
+
+    for paragraph, weight in zip(paragraphs, paragraph_weights_local):
+        start_position = max(1, int(consumed / max(total_target, 1) * total_reference))
+        end_position = max(1, int((consumed + weight) / max(total_target, 1) * total_reference))
+        start_index = min(len(reference_units) - 1, bisect.bisect_left(reference_breakpoints, start_position))
+        end_index = min(len(reference_units) - 1, bisect.bisect_left(reference_breakpoints, end_position))
+        start_ms = reference_units[start_index].start_ms
+        end_ms = reference_units[end_index].end_ms
+        if end_ms < start_ms:
+            end_ms = max(start_ms, reference_units[start_index].end_ms)
+        anchored.append(
+            Paragraph(
+                start_ms=start_ms,
+                end_ms=end_ms,
+                text=paragraph.text,
+            )
+        )
+        consumed += weight
+
+    return anchored
+
+
 def chunk_sections(paragraphs: list[Paragraph]) -> list[list[Paragraph]]:
     if not paragraphs:
         return []
@@ -488,10 +527,6 @@ def chunk_sections(paragraphs: list[Paragraph]) -> list[list[Paragraph]]:
 
 def write_text(path: Path, lines: list[str]) -> None:
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-
-
-def write_raw_txt(path: Path, lines: list[str]) -> None:
-    write_text(path, lines)
 
 
 def write_reading_md(
@@ -588,7 +623,17 @@ def ensure_whisper_python(bootstrap: bool) -> str:
     return python_executable
 
 
-def transcribe_media_to_cues(media_path: Path, model_name: str, bootstrap: bool) -> list[Cue]:
+def generated_subtitle_path(output_dir: Path, base_name: str) -> Path:
+    return output_dir / f"{base_name}.srt"
+
+
+def transcribe_media_to_cues(
+    media_path: Path,
+    model_name: str,
+    bootstrap: bool,
+    output_dir: Path,
+    base_name: str,
+) -> ProcessingResult:
     whisper_python = ensure_whisper_python(bootstrap=bootstrap)
     media_kind = "audio" if media_path.suffix.lower() in AUDIO_EXTENSIONS else "video"
     print(f"Transcribing {media_kind} with Whisper: {media_path.name} (model={model_name})", flush=True)
@@ -615,17 +660,41 @@ def transcribe_media_to_cues(media_path: Path, model_name: str, bootstrap: bool)
         srt_path = Path(temp_dir) / f"{media_path.stem}.srt"
         if not srt_path.exists():
             raise RuntimeError(f"Whisper finished but did not produce expected srt file: {srt_path}")
-        return load_srt(srt_path)
+        persisted_srt_path = generated_subtitle_path(output_dir=output_dir, base_name=base_name)
+        shutil.copy2(srt_path, persisted_srt_path)
+        return ProcessingResult(
+            cues=load_srt(persisted_srt_path),
+            source_path=persisted_srt_path,
+            generated_subtitle_path=persisted_srt_path,
+        )
 
 
-def process_input(input_path: Path, whisper_model: str, bootstrap_whisper: bool) -> list[Cue]:
+def process_input(
+    input_path: Path,
+    whisper_model: str,
+    bootstrap_whisper: bool,
+    output_dir: Path,
+    base_name: str,
+) -> ProcessingResult:
     suffix = input_path.suffix.lower()
     if suffix in SUBTITLE_EXTENSIONS:
-        return load_srt(input_path)
+        return ProcessingResult(cues=load_srt(input_path), source_path=input_path)
     if suffix in TEXT_EXTENSIONS:
-        return load_txt(input_path)
+        companion_subtitle = find_companion_subtitle(input_path)
+        reference_cues = load_srt(companion_subtitle) if companion_subtitle else None
+        return ProcessingResult(
+            cues=load_txt(input_path),
+            source_path=companion_subtitle or input_path,
+            reference_cues=reference_cues,
+        )
     if suffix in VIDEO_EXTENSIONS or suffix in AUDIO_EXTENSIONS:
-        return transcribe_media_to_cues(input_path, model_name=whisper_model, bootstrap=bootstrap_whisper)
+        return transcribe_media_to_cues(
+            input_path,
+            model_name=whisper_model,
+            bootstrap=bootstrap_whisper,
+            output_dir=output_dir,
+            base_name=base_name,
+        )
     raise ValueError(f"Unsupported input type: {input_path.suffix}")
 
 
@@ -652,6 +721,24 @@ def canonical_base_name(path: Path) -> str:
     if dot and maybe_lang.lower() in LANGUAGE_SUFFIXES:
         return prefix.strip()
     return stem
+
+
+def find_companion_subtitle(path: Path) -> Path | None:
+    if path.suffix.lower() not in TEXT_EXTENSIONS:
+        return None
+
+    base_name = canonical_base_name(path)
+    candidates = [
+        sibling
+        for sibling in sorted(path.parent.iterdir())
+        if sibling != path
+        and sibling.is_file()
+        and sibling.suffix.lower() in SUBTITLE_EXTENSIONS
+        and canonical_base_name(sibling) == base_name
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=source_priority)
 
 
 def is_supported_source(path: Path, source_kind: str = "auto") -> bool:
@@ -682,8 +769,10 @@ def translated_output_path(output_dir: Path, base_name: str) -> Path:
 
 
 def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> BundleStatus:
-    raw_exists = (output_dir / f"{base_name}.txt").exists()
-    raw_txt_path = output_dir / f"{base_name}.txt"
+    subtitle_exists = generated_subtitle_path(output_dir=output_dir, base_name=base_name).exists() or any(
+        candidate.suffix.lower() in SUBTITLE_EXTENSIONS for candidate in candidates
+    )
+    has_text_candidate = any(candidate.suffix.lower() in TEXT_EXTENSIONS for candidate in candidates)
 
     reading_names = [
         f"{base_name} 阅读整理稿.md",
@@ -694,12 +783,26 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
     zh_reading_path = translated_output_path(output_dir=output_dir, base_name=base_name)
 
     language_hint = infer_language_from_candidates(candidates)
-    if language_hint is None and raw_exists:
-        sample = raw_txt_path.read_text(encoding="utf-8")[:4000]
-        language_hint = detect_language_from_text(sample)
+    if language_hint is None:
+        subtitle_candidates = [candidate for candidate in candidates if candidate.suffix.lower() in SUBTITLE_EXTENSIONS]
+        generated_subtitle = generated_subtitle_path(output_dir=output_dir, base_name=base_name)
+        if generated_subtitle.exists():
+            subtitle_candidates.append(generated_subtitle)
+        for subtitle_candidate in subtitle_candidates:
+            language_hint = infer_language_from_path(subtitle_candidate)
+            if language_hint:
+                break
+            try:
+                language_hint = detect_language_from_cues(load_srt(subtitle_candidate))
+            except Exception:  # noqa: BLE001
+                language_hint = None
+            if language_hint and language_hint != "unknown":
+                break
+        if language_hint == "unknown":
+            language_hint = None
 
     return BundleStatus(
-        raw_exists=raw_exists,
+        source_exists=subtitle_exists or has_text_candidate,
         reading_exists=reading_exists,
         zh_reading_exists=zh_reading_path.exists(),
         needs_zh_extras=language_hint == "en",
@@ -729,7 +832,7 @@ def build_source_groups(directory: Path, output_dir: Path, source_kind: str = "a
 
 def output_paths(output_dir: Path, base_name: str) -> tuple[Path, Path]:
     return (
-        output_dir / f"{base_name}.txt",
+        generated_subtitle_path(output_dir=output_dir, base_name=base_name),
         output_dir / f"{base_name} 阅读整理稿.md",
     )
 
@@ -743,32 +846,44 @@ def generate_bundle(
     status: BundleStatus | None = None,
     language_hint: str | None = None,
 ) -> None:
-    status = status or BundleStatus(raw_exists=False, reading_exists=False)
+    status = status or BundleStatus(source_exists=False, reading_exists=False)
     if status.complete:
         print(f"Skipping complete bundle: {base_name}", flush=True)
         return
 
     print(f"[1/4] Loading source: {input_path}", flush=True)
-    cues = process_input(input_path, whisper_model=whisper_model, bootstrap_whisper=bootstrap_whisper)
-    source_language = language_hint or infer_language_from_path(input_path) or detect_language_from_cues(cues)
+    processing = process_input(
+        input_path,
+        whisper_model=whisper_model,
+        bootstrap_whisper=bootstrap_whisper,
+        output_dir=output_dir,
+        base_name=base_name,
+    )
+    if processing.reference_cues is not None and processing.source_path != input_path:
+        print(f"[1/4] Using companion subtitle timing: {processing.source_path.name}", flush=True)
+    cues = processing.cues
+    source_language = language_hint or infer_language_from_path(processing.source_path) or detect_language_from_cues(cues)
 
-    print(f"[2/4] Building cleaned raw transcript for {base_name}", flush=True)
-    raw_lines = cues_to_raw_lines(cues)
+    print(f"[2/4] Building reading paragraphs for {base_name}", flush=True)
     paragraphs = build_paragraphs(cues)
+    if processing.reference_cues:
+        paragraphs = reanchor_paragraph_times(
+            paragraphs=paragraphs,
+            reference_units=cues_as_paragraphs(processing.reference_cues),
+        )
     needs_zh_extras = status.needs_zh_extras or source_language == "en"
 
-    raw_txt_path, reading_md_path = output_paths(output_dir=output_dir, base_name=base_name)
+    subtitle_path, reading_md_path = output_paths(output_dir=output_dir, base_name=base_name)
     zh_reading_md_path = translated_output_path(output_dir=output_dir, base_name=base_name)
 
     print(f"[3/4] Writing outputs for {base_name}", flush=True)
-    if not status.raw_exists:
-        write_raw_txt(raw_txt_path, raw_lines)
-        print(raw_txt_path, flush=True)
+    if processing.generated_subtitle_path is not None:
+        print(subtitle_path, flush=True)
     if not status.reading_exists:
         write_reading_md(
             reading_md_path,
             title=base_name,
-            source_path=input_path,
+            source_path=processing.source_path,
             paragraphs=paragraphs,
             language=source_language,
         )
@@ -780,7 +895,7 @@ def generate_bundle(
         write_reading_md(
             zh_reading_md_path,
             title=base_name,
-            source_path=input_path,
+            source_path=processing.source_path,
             paragraphs=translated_paragraphs,
             language="zh",
             translated_from="en",
