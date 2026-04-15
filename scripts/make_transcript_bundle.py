@@ -582,6 +582,31 @@ def write_reading_md(
     write_text(path, lines)
 
 
+def reading_md_source_name(path: Path) -> str | None:
+    if not path.exists():
+        return None
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    match = re.search(r"^- Source: `([^`]+)`\s*$", content, flags=re.MULTILINE)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def reading_md_needs_refresh(path: Path, subtitle_exists: bool) -> bool:
+    if not subtitle_exists or not path.exists():
+        return False
+
+    source_name = reading_md_source_name(path)
+    if source_name is None:
+        return False
+    return Path(source_name).suffix.lower() in TEXT_EXTENSIONS
+
+
 def run_command(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
@@ -774,13 +799,21 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
     )
     has_text_candidate = any(candidate.suffix.lower() in TEXT_EXTENSIONS for candidate in candidates)
 
-    reading_names = [
+    reading_paths = [output_dir / name for name in (
         f"{base_name} 阅读整理稿.md",
         f"{base_name} 阅读版.md",
         f"{base_name} 整理版.md",
-    ]
-    reading_exists = any((output_dir / name).exists() for name in reading_names)
+    )]
+    existing_reading_paths = [path for path in reading_paths if path.exists()]
+    reading_exists = bool(existing_reading_paths) and not any(
+        reading_md_needs_refresh(path, subtitle_exists=subtitle_exists)
+        for path in existing_reading_paths
+    )
     zh_reading_path = translated_output_path(output_dir=output_dir, base_name=base_name)
+    zh_reading_exists = zh_reading_path.exists() and not reading_md_needs_refresh(
+        zh_reading_path,
+        subtitle_exists=subtitle_exists,
+    )
 
     language_hint = infer_language_from_candidates(candidates)
     if language_hint is None:
@@ -804,7 +837,7 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
     return BundleStatus(
         source_exists=subtitle_exists or has_text_candidate,
         reading_exists=reading_exists,
-        zh_reading_exists=zh_reading_path.exists(),
+        zh_reading_exists=zh_reading_exists,
         needs_zh_extras=language_hint == "en",
     )
 
