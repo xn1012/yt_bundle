@@ -36,9 +36,8 @@ Use `scripts/make_transcript_bundle.py` for:
 - a local `.mp4`, `.mov`, `.mkv`, `.webm`, or similar video file
 - a local `.mp3`, `.m4a`, `.wav`, `.flac`, `.opus`, or similar audio file
 - a local `.srt`
-- a local `.txt` transcript artifact
 - a directory that should be batch processed
-- a mixed directory where only subtitle files should be processed via `--source-kind subtitle`
+- a mixed directory where batch mode should use the existing `.srt` files first, then optionally fall back to media transcription
 
 Examples:
 
@@ -46,17 +45,14 @@ Examples:
 python3 scripts/make_transcript_bundle.py "/path/to/file.srt"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp4"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp3"
-python3 scripts/make_transcript_bundle.py "/path/to/file.txt"
 python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch
-python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch --source-kind subtitle
+python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch --source-kind audio
 ```
 
 Timing note:
 
 - In the normal workflow, `.srt` is the retained intermediate output.
 - When processing video or audio, persist the Whisper transcription as a same-basename `.srt` and build the reading drafts from that subtitle timeline.
-- When processing a `.txt`, prefer to preserve section timestamps by reusing a same-basename companion `.srt` in the same directory.
-- If no companion `.srt` exists, the reading draft can still be generated, but section headings will not have reliable timestamps.
 
 ## Output Conventions
 
@@ -74,6 +70,5 @@ Extra outputs for English sources:
 - Do not delete existing media or generated outputs unless the user explicitly asks.
 - Do not assume YouTube anonymous download will work; be ready to retry with cookies.
 - Prefer the unified script for URL-based requests so download-source selection stays consistent.
-- When a directory contains both subtitles and media files, use `--source-kind subtitle` if the request is based on existing `.srt` files; otherwise the batch pass may also pick up `.mp4`/`.mp3` sources.
-- When a directory contains both `.txt` and `.srt` files for the same item, the `.txt` reading draft should still inherit timestamps from the companion subtitle rather than dropping them.
+- When a directory contains both subtitles and media files, plain `--batch` runs in two stages: existing `.srt` first, then an optional media fallback prompt for items that still have no subtitle. Switch to `--source-kind audio` or `--source-kind video` only when the user explicitly wants a media-first batch pass.
 - English subtitle batches still generate Chinese reading companions, so the translation phase can take much longer than the initial transcript and reading-file write.

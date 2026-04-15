@@ -21,7 +21,6 @@ from urllib.request import Request, urlopen
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"}
 SUBTITLE_EXTENSIONS = {".srt"}
-TEXT_EXTENSIONS = {".txt"}
 LANGUAGE_SUFFIXES = {
     "ar",
     "de",
@@ -119,13 +118,12 @@ def parse_args() -> argparse.Namespace:
   python3 make_transcript_bundle.py "/path/to/video.mp4"
   python3 make_transcript_bundle.py "/path/to/audio.mp3"
   python3 make_transcript_bundle.py "/path/to/subtitle.srt"
-  python3 make_transcript_bundle.py "/path/to/transcript.txt"
   python3 make_transcript_bundle.py "/path/to/video.mp4" --output-dir "/path/to/output"
   python3 make_transcript_bundle.py "/path/to/dir" --batch
-  python3 make_transcript_bundle.py "/path/to/dir" --batch --source-kind subtitle
+  python3 make_transcript_bundle.py "/path/to/dir" --batch --source-kind audio
 """
     parser = argparse.ArgumentParser(
-        description="Generate reading markdown from a video, audio, subtitle, or transcript txt file.",
+        description="Generate reading markdown from a video, audio, subtitle, or source directory.",
         epilog=examples,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -151,11 +149,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--source-kind",
-        choices=("auto", "subtitle", "audio", "video", "media", "text"),
+        choices=("auto", "subtitle", "audio", "video"),
         default="auto",
         help=(
             "Limit which source files are considered. "
-            "Use 'subtitle' for SRT-only batch runs, 'media' for audio+video only, 'text' for txt-only, or leave as 'auto'."
+            "For directories, 'auto' runs a subtitle-first batch pass and then offers media fallback as stage 2. "
+            "Use 'audio' or 'video' to force media-only batch runs."
         ),
     )
     return parser.parse_args()
@@ -338,16 +337,6 @@ def load_srt(path: Path) -> list[Cue]:
         if not text:
             continue
         cues.append(Cue(index=index, start_ms=parse_timestamp(start_raw), end_ms=parse_timestamp(end_raw), text=text))
-    return cues
-
-
-def load_txt(path: Path) -> list[Cue]:
-    cues: list[Cue] = []
-    for index, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        text = normalize_line(raw_line)
-        if not text:
-            continue
-        cues.append(Cue(index=index, start_ms=0, end_ms=0, text=text))
     return cues
 
 
@@ -604,7 +593,7 @@ def reading_md_needs_refresh(path: Path, subtitle_exists: bool) -> bool:
     source_name = reading_md_source_name(path)
     if source_name is None:
         return False
-    return Path(source_name).suffix.lower() in TEXT_EXTENSIONS
+    return Path(source_name).suffix.lower() == ".txt"
 
 
 def run_command(command: list[str]) -> None:
@@ -704,14 +693,6 @@ def process_input(
     suffix = input_path.suffix.lower()
     if suffix in SUBTITLE_EXTENSIONS:
         return ProcessingResult(cues=load_srt(input_path), source_path=input_path)
-    if suffix in TEXT_EXTENSIONS:
-        companion_subtitle = find_companion_subtitle(input_path)
-        reference_cues = load_srt(companion_subtitle) if companion_subtitle else None
-        return ProcessingResult(
-            cues=load_txt(input_path),
-            source_path=companion_subtitle or input_path,
-            reference_cues=reference_cues,
-        )
     if suffix in VIDEO_EXTENSIONS or suffix in AUDIO_EXTENSIONS:
         return transcribe_media_to_cues(
             input_path,
@@ -724,17 +705,29 @@ def process_input(
 
 
 def allowed_extensions(source_kind: str) -> set[str]:
-    if source_kind == "text":
-        return TEXT_EXTENSIONS
     if source_kind == "subtitle":
         return SUBTITLE_EXTENSIONS
     if source_kind == "audio":
         return AUDIO_EXTENSIONS
     if source_kind == "video":
         return VIDEO_EXTENSIONS
-    if source_kind == "media":
-        return AUDIO_EXTENSIONS.union(VIDEO_EXTENSIONS)
-    return VIDEO_EXTENSIONS.union(AUDIO_EXTENSIONS, SUBTITLE_EXTENSIONS, TEXT_EXTENSIONS)
+    return VIDEO_EXTENSIONS.union(AUDIO_EXTENSIONS, SUBTITLE_EXTENSIONS)
+
+
+def collect_directory_candidates(directory: Path) -> dict[str, list[Path]]:
+    grouped: dict[str, list[Path]] = {}
+    for path in sorted(directory.iterdir()):
+        if path.name.startswith(".") or not is_supported_source(path, source_kind="auto"):
+            continue
+        grouped.setdefault(canonical_base_name(path), []).append(path)
+    return grouped
+
+
+def select_source_path(candidates: list[Path], source_kind: str) -> Path | None:
+    filtered = [candidate for candidate in candidates if candidate.suffix.lower() in allowed_extensions(source_kind)]
+    if not filtered:
+        return None
+    return min(filtered, key=source_priority)
 
 
 def canonical_base_name(path: Path) -> str:
@@ -746,24 +739,6 @@ def canonical_base_name(path: Path) -> str:
     if dot and maybe_lang.lower() in LANGUAGE_SUFFIXES:
         return prefix.strip()
     return stem
-
-
-def find_companion_subtitle(path: Path) -> Path | None:
-    if path.suffix.lower() not in TEXT_EXTENSIONS:
-        return None
-
-    base_name = canonical_base_name(path)
-    candidates = [
-        sibling
-        for sibling in sorted(path.parent.iterdir())
-        if sibling != path
-        and sibling.is_file()
-        and sibling.suffix.lower() in SUBTITLE_EXTENSIONS
-        and canonical_base_name(sibling) == base_name
-    ]
-    if not candidates:
-        return None
-    return min(candidates, key=source_priority)
 
 
 def is_supported_source(path: Path, source_kind: str = "auto") -> bool:
@@ -797,7 +772,6 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
     subtitle_exists = generated_subtitle_path(output_dir=output_dir, base_name=base_name).exists() or any(
         candidate.suffix.lower() in SUBTITLE_EXTENSIONS for candidate in candidates
     )
-    has_text_candidate = any(candidate.suffix.lower() in TEXT_EXTENSIONS for candidate in candidates)
 
     reading_paths = [output_dir / name for name in (
         f"{base_name} 阅读整理稿.md",
@@ -835,7 +809,7 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
             language_hint = None
 
     return BundleStatus(
-        source_exists=subtitle_exists or has_text_candidate,
+        source_exists=subtitle_exists,
         reading_exists=reading_exists,
         zh_reading_exists=zh_reading_exists,
         needs_zh_extras=language_hint == "en",
@@ -843,15 +817,11 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
 
 
 def build_source_groups(directory: Path, output_dir: Path, source_kind: str = "auto") -> list[SourceGroup]:
-    grouped: dict[str, list[Path]] = {}
-    for path in sorted(directory.iterdir()):
-        if path.name.startswith(".") or not is_supported_source(path, source_kind=source_kind):
-            continue
-        grouped.setdefault(canonical_base_name(path), []).append(path)
-
     groups: list[SourceGroup] = []
-    for base_name, candidates in sorted(grouped.items()):
-        source_path = min(candidates, key=source_priority)
+    for base_name, candidates in sorted(collect_directory_candidates(directory).items()):
+        source_path = select_source_path(candidates, source_kind)
+        if source_path is None:
+            continue
         groups.append(
             SourceGroup(
                 base_name=base_name,
@@ -861,6 +831,57 @@ def build_source_groups(directory: Path, output_dir: Path, source_kind: str = "a
             )
         )
     return groups
+
+
+def build_media_fallback_groups(directory: Path, output_dir: Path) -> list[SourceGroup]:
+    groups: list[SourceGroup] = []
+    media_extensions = AUDIO_EXTENSIONS.union(VIDEO_EXTENSIONS)
+    for base_name, candidates in sorted(collect_directory_candidates(directory).items()):
+        media_candidates = [candidate for candidate in candidates if candidate.suffix.lower() in media_extensions]
+        if not media_candidates:
+            continue
+        subtitle_exists = generated_subtitle_path(output_dir=output_dir, base_name=base_name).exists() or any(
+            candidate.suffix.lower() in SUBTITLE_EXTENSIONS for candidate in candidates
+        )
+        if subtitle_exists:
+            continue
+        groups.append(
+            SourceGroup(
+                base_name=base_name,
+                source_path=min(media_candidates, key=source_priority),
+                status=bundle_status(output_dir=output_dir, base_name=base_name, candidates=candidates),
+                language_hint=infer_language_from_candidates(candidates),
+            )
+        )
+    return groups
+
+
+def prompt_media_fallback(groups: list[SourceGroup]) -> bool:
+    if not groups:
+        return False
+
+    print(
+        f"Stage 2 available: found {len(groups)} media-only source group(s) with no subtitle yet.",
+        flush=True,
+    )
+    for group in groups[:10]:
+        print(f"  - {group.base_name} ({group.source_path.name})", flush=True)
+    if len(groups) > 10:
+        print(f"  ... and {len(groups) - 10} more", flush=True)
+
+    if not sys.stdin.isatty():
+        print(
+            "Skipping stage 2 in non-interactive mode. "
+            "Re-run with --source-kind audio or --source-kind video to transcribe media explicitly.",
+            flush=True,
+        )
+        return False
+
+    try:
+        answer = input("Stage 2 will transcribe media and generate new .srt files. Continue? [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return answer in {"y", "yes"}
 
 
 def output_paths(output_dir: Path, base_name: str) -> tuple[Path, Path]:
@@ -944,9 +965,14 @@ def main() -> int:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    if input_path.is_file() and not is_supported_source(input_path, source_kind=args.source_kind):
+    auto_directory_mode = (args.batch or input_path.is_dir()) and args.source_kind == "auto"
+    effective_source_kind = args.source_kind
+    if auto_directory_mode:
+        effective_source_kind = "subtitle"
+
+    if input_path.is_file() and not is_supported_source(input_path, source_kind=effective_source_kind):
         raise ValueError(
-            f"Input file {input_path.name} does not match --source-kind {args.source_kind!r}"
+            f"Input file {input_path.name} does not match --source-kind {effective_source_kind!r}"
         )
 
     default_output_dir = input_path if input_path.is_dir() else input_path.parent
@@ -957,7 +983,7 @@ def main() -> int:
         if not input_path.is_dir():
             raise ValueError("--batch requires a directory input")
 
-        groups = build_source_groups(directory=input_path, output_dir=output_dir, source_kind=args.source_kind)
+        groups = build_source_groups(directory=input_path, output_dir=output_dir, source_kind=effective_source_kind)
         pending = [group for group in groups if not group.status.complete]
         print(f"Found {len(groups)} candidate source groups, {len(pending)} pending", flush=True)
         for index, group in enumerate(pending, start=1):
@@ -977,6 +1003,24 @@ def main() -> int:
             )
         if not pending:
             print("Nothing to do.", flush=True)
+        if auto_directory_mode:
+            fallback_groups = [group for group in build_media_fallback_groups(input_path, output_dir) if not group.status.complete]
+            if prompt_media_fallback(fallback_groups):
+                for index, group in enumerate(fallback_groups, start=1):
+                    print(
+                        f"=== [stage2 {index}/{len(fallback_groups)}] {group.base_name} "
+                        f"(source: {group.source_path.name}) ===",
+                        flush=True,
+                    )
+                    generate_bundle(
+                        input_path=group.source_path,
+                        output_dir=output_dir,
+                        base_name=group.base_name,
+                        whisper_model=args.whisper_model,
+                        bootstrap_whisper=args.bootstrap_whisper,
+                        status=group.status,
+                        language_hint=group.language_hint,
+                    )
         return 0
 
     generate_bundle(

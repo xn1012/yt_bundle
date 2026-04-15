@@ -15,7 +15,7 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
 - If the user gives a YouTube URL and wants download only, run `scripts/download_youtube_source.py`.
 - If the user gives a local video file, audio file, or subtitle file, run `scripts/make_transcript_bundle.py`.
 - If the user gives a directory and wants missing bundles filled in, run `scripts/make_transcript_bundle.py <dir> --batch`.
-- If the user specifically wants to process only subtitle files inside a mixed directory, run `scripts/make_transcript_bundle.py <dir> --batch --source-kind subtitle`.
+- Directory batch mode is two-stage by default: process existing subtitles first, then offer media transcription as an explicit second stage with a default answer of no. Use `--source-kind audio` or `--source-kind video` only when the user explicitly wants media-only batch regeneration.
 
 ## Default Behavior
 
@@ -24,7 +24,6 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
 - Fall back to video or audio transcription when subtitles are unavailable.
 - Preserve existing downloaded media and generated outputs unless the user explicitly asks to delete or overwrite.
 - Preserve `.srt` as the retained intermediate artifact in the normal workflow.
-- Treat `.txt` as a compatibility input, not the primary timing source.
 - Expect English sources to produce:
   - subtitle `.srt`
   - source-language reading draft `.md`
@@ -52,9 +51,8 @@ Run local bundle generation:
 
 ```bash
 python3 scripts/make_transcript_bundle.py "<video-audio-or-srt-path>" [--output-dir "<dir>"]
-python3 scripts/make_transcript_bundle.py "<transcript-txt-path>" [--output-dir "<dir>"]
 python3 scripts/make_transcript_bundle.py "<dir>" --batch
-python3 scripts/make_transcript_bundle.py "<dir>" --batch --source-kind subtitle
+python3 scripts/make_transcript_bundle.py "<dir>" --batch --source-kind audio
 ```
 
 ## Working Notes
@@ -62,8 +60,7 @@ python3 scripts/make_transcript_bundle.py "<dir>" --batch --source-kind subtitle
 - Use `-h` on any bundled script if options are unclear.
 - Use `--cookies-from-browser chrome` first when YouTube blocks anonymous access and the user has not provided a cookies file.
 - Use `--bootstrap-whisper` only when video transcription is required and no working Whisper runtime is already available.
-- For subtitle-only directory jobs, prefer `--source-kind subtitle` so mixed-in `.mp4` or `.mp3` files do not trigger extra source groups or Whisper transcription.
+- For directory jobs based on existing `.srt` files, plain `--batch` is enough. If some items still have only `.mp4` or `.mp3`, the script reports them as a stage-2 fallback and asks before starting Whisper transcription.
 - In the normal workflow, subtitle timing should be preserved all the way through. If the source is video or audio, persist the Whisper transcription as `.srt` and build the reading draft from that subtitle timeline.
-- A `.txt` input is a compatibility path. If a same-basename companion `.srt` exists beside the `.txt`, the reading draft should inherit section timestamps from that subtitle timeline.
 - English subtitle sources also generate Chinese reading companions, and that translation step can be much slower than writing the base transcript plus reading draft.
 - Read [references/workflow.md](references/workflow.md) when you need the exact output conventions or a reminder of which script to call.
