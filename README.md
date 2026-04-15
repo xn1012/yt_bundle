@@ -153,6 +153,8 @@ python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch
 In batch mode, plain `--batch` now runs in two stages: process existing `.srt` files first, then report media-only items that still have no subtitle. Interactive runs ask before starting Whisper transcription for that second stage, and the default answer is no.
 Use `--source-kind audio` or `--source-kind video` only when you explicitly want media-only regeneration from local files.
 
+When usable outputs already exist in a temp directory or nearby workspace, prefer moving, renaming, or reusing those artifacts instead of rerunning download, transcription, or translation. Only regenerate when the user explicitly asks for a fresh run.
+
 ## Typical Outputs
 
 For a source named `Example Video [abc123].mp4` or `Example Video [abc123].en.srt`, the bundle generator creates:

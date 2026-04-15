@@ -70,5 +70,6 @@ Extra outputs for English sources:
 - Do not delete existing media or generated outputs unless the user explicitly asks.
 - Do not assume YouTube anonymous download will work; be ready to retry with cookies.
 - Prefer the unified script for URL-based requests so download-source selection stays consistent.
+- If the needed outputs already exist in a temp directory or nearby workspace, move or reuse them instead of rerunning expensive download, transcription, or translation steps unless the user explicitly asks to regenerate.
 - When a directory contains both subtitles and media files, plain `--batch` runs in two stages: existing `.srt` first, then an optional media fallback prompt for items that still have no subtitle. Switch to `--source-kind audio` or `--source-kind video` only when the user explicitly wants a media-first batch pass.
 - English subtitle batches still generate Chinese reading companions, so the translation phase can take much longer than the initial transcript and reading-file write.
