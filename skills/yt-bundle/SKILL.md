@@ -12,6 +12,7 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
 - If the user gives a YouTube URL and wants the whole workflow, run `scripts/yt_bundle.py` from the repository root.
 - If the user gives a YouTube URL and wants audio-only download or audio-based transcription, run `scripts/yt_bundle.py --media-type audio` or `scripts/download_youtube_source.py --media-type audio`.
 - If the user gives a YouTube URL and wants subtitle-only download plus downstream processing, run `scripts/yt_bundle.py --media-type subtitle`.
+- If the user wants a bilingual reading `.docx` for an English source, add `--bilingual-docx`.
 - If the user gives a YouTube URL and wants download only, run `scripts/download_youtube_source.py`.
 - If the user gives a local video file, audio file, or subtitle file, run `scripts/make_transcript_bundle.py`.
 - If the user gives a directory and wants missing bundles filled in, run `scripts/make_transcript_bundle.py <dir> --batch`.
@@ -28,6 +29,8 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
   - subtitle `.srt`
   - source-language reading draft `.md`
   - Chinese reading draft `.md`
+- If `--bilingual-docx` is enabled for an English source, also produce:
+  - section-aligned bilingual reading `.docx`
 
 ## Commands
 
@@ -37,6 +40,7 @@ Run the unified workflow:
 python3 scripts/yt_bundle.py "<youtube-url>" [--output-dir "<dir>"] [--cookies-from-browser chrome]
 python3 scripts/yt_bundle.py "<youtube-url>" --media-type audio [--output-dir "<dir>"] [--cookies-from-browser chrome]
 python3 scripts/yt_bundle.py "<youtube-url>" --media-type subtitle [--output-dir "<dir>"] [--cookies-from-browser chrome]
+python3 scripts/yt_bundle.py "<youtube-url>" --bilingual-docx [--output-dir "<dir>"] [--cookies-from-browser chrome]
 ```
 
 Run download only:
@@ -53,6 +57,7 @@ Run local bundle generation:
 python3 scripts/make_transcript_bundle.py "<video-audio-or-srt-path>" [--output-dir "<dir>"]
 python3 scripts/make_transcript_bundle.py "<dir>" --batch
 python3 scripts/make_transcript_bundle.py "<dir>" --batch --source-kind audio
+python3 scripts/make_transcript_bundle.py "<video-audio-or-srt-path>" --bilingual-docx
 ```
 
 ## Working Notes
@@ -64,4 +69,5 @@ python3 scripts/make_transcript_bundle.py "<dir>" --batch --source-kind audio
 - For directory jobs based on existing `.srt` files, plain `--batch` is enough. If some items still have only `.mp4` or `.mp3`, the script reports them as a stage-2 fallback and asks before starting Whisper transcription.
 - In the normal workflow, subtitle timing should be preserved all the way through. If the source is video or audio, persist the Whisper transcription as `.srt` and build the reading draft from that subtitle timeline.
 - English subtitle sources also generate Chinese reading companions, and that translation step can be much slower than writing the base transcript plus reading draft.
+- `--bilingual-docx` only applies to English sources with both English and Chinese reading markdown available. The exported `.docx` is section-aligned and alternates English and Chinese paragraphs inside each section.
 - Read [references/workflow.md](references/workflow.md) when you need the exact output conventions or a reminder of which script to call.

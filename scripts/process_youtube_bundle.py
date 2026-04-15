@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
   python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --cookies /path/to/cookies.txt
   python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type audio
   python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type subtitle
+  python3 yt_bundle.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --bilingual-docx
 """
     parser = argparse.ArgumentParser(
         description="Download a YouTube video, audio, or subtitle source, choose the best available processing source, and generate the transcript bundle.",
@@ -90,6 +91,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Create a temporary Whisper environment if no runtime is currently available.",
     )
+    parser.add_argument(
+        "--bilingual-docx",
+        action="store_true",
+        help="For English sources with Chinese companion markdown, also write a section-aligned bilingual .docx.",
+    )
     return parser.parse_args()
 
 
@@ -144,6 +150,7 @@ def main() -> int:
         base_name=base_name,
         whisper_model=args.whisper_model,
         bootstrap_whisper=args.bootstrap_whisper,
+        bilingual_docx=args.bilingual_docx,
         status=status,
         language_hint=language_hint,
     )

@@ -17,6 +17,8 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from make_bilingual_reading_docx import bilingual_docx_output_path, write_bilingual_docx
+
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"}
@@ -121,6 +123,7 @@ def parse_args() -> argparse.Namespace:
   python3 make_transcript_bundle.py "/path/to/video.mp4" --output-dir "/path/to/output"
   python3 make_transcript_bundle.py "/path/to/dir" --batch
   python3 make_transcript_bundle.py "/path/to/dir" --batch --source-kind audio
+  python3 make_transcript_bundle.py "/path/to/file.srt" --bilingual-docx
 """
     parser = argparse.ArgumentParser(
         description="Generate reading markdown from a video, audio, subtitle, or source directory.",
@@ -156,6 +159,11 @@ def parse_args() -> argparse.Namespace:
             "For directories, 'auto' runs a subtitle-first batch pass and then offers media fallback as stage 2. "
             "Use 'audio' or 'video' to force media-only batch runs."
         ),
+    )
+    parser.add_argument(
+        "--bilingual-docx",
+        action="store_true",
+        help="For English sources with Chinese companion markdown, also write a section-aligned bilingual .docx.",
     )
     return parser.parse_args()
 
@@ -768,6 +776,26 @@ def translated_output_path(output_dir: Path, base_name: str) -> Path:
     return output_dir / f"{base_name} 中文阅读整理稿.md"
 
 
+def bilingual_docx_path(output_dir: Path, base_name: str) -> Path:
+    english_md = output_dir / f"{base_name} 阅读整理稿.md"
+    return bilingual_docx_output_path(english_md)
+
+
+def bilingual_docx_complete(output_dir: Path, base_name: str, needs_zh_extras: bool) -> bool:
+    if not needs_zh_extras:
+        return True
+    return bilingual_docx_path(output_dir=output_dir, base_name=base_name).exists()
+
+
+def ensure_bilingual_docx(output_dir: Path, base_name: str) -> Path | None:
+    english_md = output_dir / f"{base_name} 阅读整理稿.md"
+    chinese_md = translated_output_path(output_dir=output_dir, base_name=base_name)
+    if not english_md.exists() or not chinese_md.exists():
+        return None
+    output_path = bilingual_docx_path(output_dir=output_dir, base_name=base_name)
+    return write_bilingual_docx(english_md=english_md, chinese_md=chinese_md, output_path=output_path)
+
+
 def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> BundleStatus:
     subtitle_exists = generated_subtitle_path(output_dir=output_dir, base_name=base_name).exists() or any(
         candidate.suffix.lower() in SUBTITLE_EXTENSIONS for candidate in candidates
@@ -897,10 +925,18 @@ def generate_bundle(
     base_name: str,
     whisper_model: str,
     bootstrap_whisper: bool,
+    bilingual_docx: bool = False,
     status: BundleStatus | None = None,
     language_hint: str | None = None,
 ) -> None:
     status = status or BundleStatus(source_exists=False, reading_exists=False)
+    if status.complete and bilingual_docx and status.needs_zh_extras:
+        output_path = ensure_bilingual_docx(output_dir=output_dir, base_name=base_name)
+        if output_path is not None:
+            print(f"Writing bilingual docx for {base_name}", flush=True)
+            print(output_path, flush=True)
+        print(f"Skipping complete bundle: {base_name}", flush=True)
+        return
     if status.complete:
         print(f"Skipping complete bundle: {base_name}", flush=True)
         return
@@ -955,6 +991,10 @@ def generate_bundle(
             translated_from="en",
         )
         print(zh_reading_md_path, flush=True)
+    if bilingual_docx and needs_zh_extras:
+        output_path = ensure_bilingual_docx(output_dir=output_dir, base_name=base_name)
+        if output_path is not None:
+            print(output_path, flush=True)
 
     print("[4/4] Done", flush=True)
 
@@ -984,7 +1024,12 @@ def main() -> int:
             raise ValueError("--batch requires a directory input")
 
         groups = build_source_groups(directory=input_path, output_dir=output_dir, source_kind=effective_source_kind)
-        pending = [group for group in groups if not group.status.complete]
+        pending = [
+            group
+            for group in groups
+            if (not group.status.complete)
+            or (args.bilingual_docx and not bilingual_docx_complete(output_dir, group.base_name, group.status.needs_zh_extras))
+        ]
         print(f"Found {len(groups)} candidate source groups, {len(pending)} pending", flush=True)
         for index, group in enumerate(pending, start=1):
             print(
@@ -998,6 +1043,7 @@ def main() -> int:
                 base_name=group.base_name,
                 whisper_model=args.whisper_model,
                 bootstrap_whisper=args.bootstrap_whisper,
+                bilingual_docx=args.bilingual_docx,
                 status=group.status,
                 language_hint=group.language_hint,
             )
@@ -1018,17 +1064,21 @@ def main() -> int:
                         base_name=group.base_name,
                         whisper_model=args.whisper_model,
                         bootstrap_whisper=args.bootstrap_whisper,
+                        bilingual_docx=args.bilingual_docx,
                         status=group.status,
                         language_hint=group.language_hint,
                     )
         return 0
 
+    status = bundle_status(output_dir=output_dir, base_name=canonical_base_name(input_path), candidates=[input_path])
     generate_bundle(
         input_path=input_path,
         output_dir=output_dir,
         base_name=canonical_base_name(input_path),
         whisper_model=args.whisper_model,
         bootstrap_whisper=args.bootstrap_whisper,
+        bilingual_docx=args.bilingual_docx,
+        status=status,
         language_hint=infer_language_from_path(input_path),
     )
     return 0

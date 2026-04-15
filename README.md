@@ -39,6 +39,7 @@ Notes:
 - `openai-whisper` is used when the pipeline must transcribe from video.
 - `ffmpeg` is required by `yt-dlp` audio extraction and Whisper media handling.
 - `requests` is used by the older bilingual helper script.
+- `python-docx` is used for bilingual reading docx export.
 
 ## Recommended Entry Point
 
@@ -130,6 +131,12 @@ Send all outputs to a dedicated directory:
 python3 scripts/yt_bundle.py "https://www.youtube.com/watch?v=VIDEO_ID" --output-dir "/path/to/output"
 ```
 
+Also write a bilingual reading `.docx` when the source is English:
+
+```bash
+python3 scripts/yt_bundle.py "https://www.youtube.com/watch?v=VIDEO_ID" --bilingual-docx
+```
+
 ## Local Source Processing
 
 Generate from an existing local subtitle, video, or audio file:
@@ -153,6 +160,12 @@ python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch
 In batch mode, plain `--batch` now runs in two stages: process existing `.srt` files first, then report media-only items that still have no subtitle. Interactive runs ask before starting Whisper transcription for that second stage, and the default answer is no.
 Use `--source-kind audio` or `--source-kind video` only when you explicitly want media-only regeneration from local files.
 
+When the source is English and the Chinese reading companion exists, you can also write a section-aligned bilingual docx:
+
+```bash
+python3 scripts/make_transcript_bundle.py "/path/to/file.srt" --bilingual-docx
+```
+
 When usable outputs already exist in a temp directory or nearby workspace, prefer moving, renaming, or reusing those artifacts instead of rerunning download, transcription, or translation. Only regenerate when the user explicitly asks for a fresh run.
 
 ## Typical Outputs
@@ -165,6 +178,10 @@ For a source named `Example Video [abc123].mp4` or `Example Video [abc123].en.sr
 If the source is English, it also creates:
 
 - `Example Video [abc123] 中文阅读整理稿.md`
+
+Optional bilingual docx output for English sources:
+
+- `Example Video [abc123] 双语阅读整理稿.docx`
 
 ## Help
 

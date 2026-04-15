@@ -8,6 +8,7 @@ Use `scripts/yt_bundle.py` for the normal end-to-end case:
 python3 scripts/yt_bundle.py "<youtube-url>" --output-dir "<dir>"
 python3 scripts/yt_bundle.py "<youtube-url>" --media-type audio --output-dir "<dir>"
 python3 scripts/yt_bundle.py "<youtube-url>" --media-type subtitle --output-dir "<dir>"
+python3 scripts/yt_bundle.py "<youtube-url>" --bilingual-docx --output-dir "<dir>"
 ```
 
 Add cookies when needed:
@@ -47,6 +48,7 @@ python3 scripts/make_transcript_bundle.py "/path/to/file.mp4"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp3"
 python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch
 python3 scripts/make_transcript_bundle.py "/path/to/dir" --batch --source-kind audio
+python3 scripts/make_transcript_bundle.py "/path/to/file.srt" --bilingual-docx
 ```
 
 Timing note:
@@ -65,6 +67,10 @@ Extra outputs for English sources:
 
 - `<stem> 中文阅读整理稿.md`
 
+Optional bilingual docx output for English sources:
+
+- `<stem> 双语阅读整理稿.docx`
+
 ## Guardrails
 
 - Do not delete existing media or generated outputs unless the user explicitly asks.
@@ -73,3 +79,4 @@ Extra outputs for English sources:
 - If the needed outputs already exist in a temp directory or nearby workspace, move or reuse them instead of rerunning expensive download, transcription, or translation steps unless the user explicitly asks to regenerate.
 - When a directory contains both subtitles and media files, plain `--batch` runs in two stages: existing `.srt` first, then an optional media fallback prompt for items that still have no subtitle. Switch to `--source-kind audio` or `--source-kind video` only when the user explicitly wants a media-first batch pass.
 - English subtitle batches still generate Chinese reading companions, so the translation phase can take much longer than the initial transcript and reading-file write.
+- The bilingual docx export is only for English sources that already have the paired English and Chinese reading markdown files. Its layout is section-based, with English and Chinese paragraphs alternating inside each section.
