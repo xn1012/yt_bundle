@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 DEFAULT_BROWSER_ORDER = ["chrome", "safari", "edge", "firefox", "brave"]
-DEFAULT_SUBTITLE_LANGS = ["en", "en-orig", "zh-Hans", "zh-Hant", "zh"]
+DEFAULT_SUBTITLE_LANGS = ["en", "en-orig", "zh-TW", "zh-Hans", "zh-Hant", "zh"]
 DEFAULT_VIDEO_FORMAT = "bv*[height<=720]+ba/b[height<=720]"
 VIDEO_EXTENSIONS = {".mp4"}
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"}
@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE"
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --output-dir "/path/to/output"
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --cookies-from-browser chrome
-  python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --prefer-subtitle-langs "en,en-orig,zh-Hans,zh-Hant,zh"
+  python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --prefer-subtitle-langs "en,en-orig,zh-TW,zh-Hans,zh-Hant,zh"
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type audio
   python3 download_youtube_source.py "https://www.youtube.com/watch?v=3DlXq9nsQOE" --media-type subtitle
 """
@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--prefer-subtitle-langs",
         default=",".join(DEFAULT_SUBTITLE_LANGS),
-        help="Preferred subtitle language order. Defaults to en,en-orig,zh-Hans,zh-Hant,zh.",
+        help="Preferred subtitle language order. Defaults to en,en-orig,zh-TW,zh-Hans,zh-Hant,zh.",
     )
     parser.add_argument(
         "--format",

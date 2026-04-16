@@ -21,7 +21,7 @@ Use this skill to run the existing YouTube download and transcript-bundle workfl
 ## Default Behavior
 
 - Write outputs into the user-requested directory. If none is given, use the current working directory.
-- Prefer English subtitles over Chinese subtitles when both exist.
+- Prefer subtitle languages in this order by default: `en`, `en-orig`, `zh-TW`, `zh-Hans`, `zh-Hant`, `zh`.
 - Fall back to video or audio transcription when subtitles are unavailable.
 - Preserve existing downloaded media and generated outputs unless the user explicitly asks to delete or overwrite.
 - Preserve `.srt` as the retained intermediate artifact in the normal workflow.

@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--prefer-subtitle-langs",
         default=",".join(DEFAULT_SUBTITLE_LANGS),
-        help="Preferred subtitle language order. Defaults to en,en-orig,zh-Hans,zh-Hant,zh.",
+        help="Preferred subtitle language order. Defaults to en,en-orig,zh-TW,zh-Hans,zh-Hant,zh.",
     )
     parser.add_argument(
         "--format",
