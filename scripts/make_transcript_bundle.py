@@ -53,7 +53,7 @@ ZH_RE = re.compile(r"[\u4e00-\u9fff]+")
 EN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+_.-]*")
 SRT_BREAK_RE = re.compile(r"\n\s*\n", re.MULTILINE)
 SENTENCE_SPLIT_RE = re.compile(r'(?<=[。！？!?])\s+|(?<=[.])\s+(?=(?:["“”‘’\']?[A-Z]))')
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 TRANSLATION_REPLACEMENTS = {
     "云代码": "Claude Code",
@@ -268,7 +268,7 @@ def save_translation_cache(cache_path: Path, cache: dict[str, str]) -> None:
     cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def translate_text(text: str) -> str:
+def request_translation(text: str) -> str:
     params = urlencode(
         {
             "client": "gtx",
@@ -284,6 +284,70 @@ def translate_text(text: str) -> str:
     pieces = payload[0] or []
     translated = "".join(piece[0] for piece in pieces if piece and piece[0]).strip()
     return cleanup_translation(translated)
+
+
+def split_translation_chunk(text: str, max_chars: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [text] if text else []
+
+    chunks: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if current and len(candidate) > max_chars:
+            chunks.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def split_for_translation(text: str, max_chars: int = 240) -> list[str]:
+    normalized = normalize_line(text)
+    if not normalized:
+        return []
+
+    sentences = [part.strip() for part in SENTENCE_SPLIT_RE.split(normalized) if part and part.strip()]
+    if not sentences:
+        sentences = [normalized]
+
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences:
+        candidate = sentence if not current else f"{current} {sentence}"
+        if current and len(candidate) > max_chars:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = candidate
+
+    if current:
+        chunks.append(current)
+
+    final_chunks: list[str] = []
+    for chunk in chunks:
+        if len(chunk) > max_chars:
+            final_chunks.extend(split_translation_chunk(chunk, max_chars=max_chars))
+        else:
+            final_chunks.append(chunk)
+    return final_chunks
+
+
+def translate_text(text: str, max_chars: int = 240) -> str:
+    chunks = split_for_translation(text, max_chars=max_chars)
+    if not chunks:
+        return ""
+    if len(chunks) == 1:
+        translated = request_translation(chunks[0])
+        if detect_language_from_text(chunks[0]) == "en" and detect_language_from_text(translated) == "en" and len(chunks[0]) > 120:
+            finer_chunks = split_for_translation(chunks[0], max_chars=120)
+            if len(finer_chunks) > 1:
+                return cleanup_translation(" ".join(request_translation(chunk) for chunk in finer_chunks))
+        return translated
+    return cleanup_translation(" ".join(request_translation(chunk) for chunk in chunks))
 
 
 def translate_paragraphs(paragraphs: list[Paragraph], output_dir: Path, base_name: str) -> list[Paragraph]:
@@ -522,6 +586,34 @@ def chunk_sections(paragraphs: list[Paragraph]) -> list[list[Paragraph]]:
     return sections
 
 
+def apply_section_lengths(paragraphs: list[Paragraph], section_lengths: list[int] | None) -> list[list[Paragraph]]:
+    if not paragraphs:
+        return []
+    if not section_lengths:
+        return chunk_sections(paragraphs)
+
+    sections: list[list[Paragraph]] = []
+    cursor = 0
+    total = len(paragraphs)
+
+    for length in section_lengths:
+        if cursor >= total:
+            break
+        if length <= 0:
+            continue
+        next_cursor = min(total, cursor + length)
+        sections.append(paragraphs[cursor:next_cursor])
+        cursor = next_cursor
+
+    if cursor < total:
+        if sections:
+            sections[-1].extend(paragraphs[cursor:])
+        else:
+            sections.append(paragraphs[cursor:])
+
+    return [section for section in sections if section]
+
+
 def write_text(path: Path, lines: list[str]) -> None:
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
@@ -533,8 +625,9 @@ def write_reading_md(
     paragraphs: list[Paragraph],
     language: str,
     translated_from: str | None = None,
+    section_lengths: list[int] | None = None,
 ) -> None:
-    sections = chunk_sections(paragraphs)
+    sections = apply_section_lengths(paragraphs, section_lengths)
     if language == "en":
         lines = [
             f"# {title} Reading Draft",
@@ -592,6 +685,75 @@ def reading_md_source_name(path: Path) -> str | None:
     if not match:
         return None
     return match.group(1).strip()
+
+
+def reading_md_timestamp_ranges(path: Path) -> list[tuple[str, str]]:
+    if not path.exists():
+        return []
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    return re.findall(r"^## .+?(\d{2}:\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}:\d{2}).*$", content, flags=re.MULTILINE)
+
+
+def reading_md_body_paragraphs(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    paragraphs: list[str] = []
+    buffer: list[str] = []
+    in_section = False
+    for line in lines:
+        if line.startswith("## "):
+            if buffer:
+                paragraph = normalize_line(" ".join(buffer))
+                if paragraph:
+                    paragraphs.append(paragraph)
+                buffer = []
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if not line.strip():
+            if buffer:
+                paragraph = normalize_line(" ".join(buffer))
+                if paragraph:
+                    paragraphs.append(paragraph)
+                buffer = []
+            continue
+        buffer.append(line.strip())
+
+    if buffer:
+        paragraph = normalize_line(" ".join(buffer))
+        if paragraph:
+            paragraphs.append(paragraph)
+    return paragraphs
+
+
+def translated_md_has_untranslated_paragraphs(path: Path) -> bool:
+    for paragraph in reading_md_body_paragraphs(path):
+        if detect_language_from_text(paragraph) == "en":
+            return True
+    return False
+
+
+def bilingual_sections_need_refresh(english_path: Path, chinese_path: Path) -> bool:
+    if not english_path.exists() or not chinese_path.exists():
+        return False
+
+    english_ranges = reading_md_timestamp_ranges(english_path)
+    chinese_ranges = reading_md_timestamp_ranges(chinese_path)
+    if not english_ranges or not chinese_ranges:
+        return False
+    return english_ranges != chinese_ranges
 
 
 def reading_md_needs_refresh(path: Path, subtitle_exists: bool) -> bool:
@@ -811,6 +973,7 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
         reading_md_needs_refresh(path, subtitle_exists=subtitle_exists)
         for path in existing_reading_paths
     )
+    reading_path = existing_reading_paths[0] if existing_reading_paths else reading_paths[0]
     zh_reading_path = translated_output_path(output_dir=output_dir, base_name=base_name)
     zh_reading_exists = zh_reading_path.exists() and not reading_md_needs_refresh(
         zh_reading_path,
@@ -835,6 +998,12 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
                 break
         if language_hint == "unknown":
             language_hint = None
+
+    if language_hint == "en" and reading_exists and zh_reading_exists:
+        if bilingual_sections_need_refresh(reading_path, zh_reading_path):
+            zh_reading_exists = False
+        elif translated_md_has_untranslated_paragraphs(zh_reading_path):
+            zh_reading_exists = False
 
     return BundleStatus(
         source_exists=subtitle_exists,
@@ -961,6 +1130,7 @@ def generate_bundle(
             paragraphs=paragraphs,
             reference_units=cues_as_paragraphs(processing.reference_cues),
         )
+    section_lengths = [len(section) for section in chunk_sections(paragraphs)]
     needs_zh_extras = status.needs_zh_extras or source_language == "en"
 
     subtitle_path, reading_md_path = output_paths(output_dir=output_dir, base_name=base_name)
@@ -976,6 +1146,7 @@ def generate_bundle(
             source_path=processing.source_path,
             paragraphs=paragraphs,
             language=source_language,
+            section_lengths=section_lengths,
         )
         print(reading_md_path, flush=True)
     if needs_zh_extras and not status.zh_reading_exists:
@@ -989,6 +1160,7 @@ def generate_bundle(
             paragraphs=translated_paragraphs,
             language="zh",
             translated_from="en",
+            section_lengths=section_lengths,
         )
         print(zh_reading_md_path, flush=True)
     if bilingual_docx and needs_zh_extras:
