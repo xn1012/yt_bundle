@@ -26,6 +26,7 @@ Behavior:
 
 - prefer `en`, `en-orig`
 - then prefer `zh-TW`, `zh-Hans`, `zh-Hant`, `zh`
+- when English is available, download English first and try Chinese only once as an optional follow-up subtitle fetch
 - retry protected downloads with cookies
 - use `--media-type audio` when the user asks to download audio only
 - use `--media-type subtitle` when the user wants subtitle-only download before bundle generation

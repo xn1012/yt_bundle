@@ -226,6 +226,17 @@ def choose_subtitle_languages(metadata: dict, preferred: list[str]) -> list[str]
     return selected
 
 
+def split_selected_subtitle_languages(selected_languages: list[str]) -> tuple[str | None, str | None]:
+    english: str | None = None
+    chinese: str | None = None
+    for language in selected_languages:
+        if english is None and is_english_lang(language):
+            english = language
+        elif chinese is None and is_chinese_lang(language):
+            chinese = language
+    return english, chinese
+
+
 def download_command(
     url: str,
     output_dir: Path,
@@ -319,12 +330,19 @@ def download_youtube(
         browser_order=browser_order,
     )
     selected_subtitle_languages = choose_subtitle_languages(metadata=metadata, preferred=preferred_subtitle_langs)
+    english_subtitle_language, chinese_subtitle_language = split_selected_subtitle_languages(selected_subtitle_languages)
 
     auth_args: list[str] = []
     if used_auth == "cookies-file" and cookies_path:
         auth_args = ["--cookies", cookies_path]
     elif used_auth.startswith("browser:"):
         auth_args = ["--cookies-from-browser", used_auth.split(":", 1)[1]]
+
+    primary_subtitle_languages: list[str] = []
+    if english_subtitle_language:
+        primary_subtitle_languages = [english_subtitle_language]
+    elif chinese_subtitle_language:
+        primary_subtitle_languages = [chinese_subtitle_language]
 
     result = run_command(
         download_command(
@@ -335,11 +353,30 @@ def download_youtube(
             audio_format=audio_format,
             js_runtime=js_runtime,
             auth_args=auth_args,
-            subtitle_languages=selected_subtitle_languages,
+            subtitle_languages=primary_subtitle_languages,
         )
     )
     if result.returncode != 0:
         raise RuntimeError(result.stdout.strip())
+
+    if english_subtitle_language and chinese_subtitle_language:
+        chinese_result = run_command(
+            download_command(
+                url=url,
+                output_dir=output_dir,
+                fmt=fmt,
+                media_type="subtitle",
+                audio_format=audio_format,
+                js_runtime=js_runtime,
+                auth_args=auth_args,
+                subtitle_languages=[chinese_subtitle_language],
+            )
+        )
+        if chinese_result.returncode != 0:
+            print(
+                f"[subtitle] Optional Chinese subtitle download failed once for {chinese_subtitle_language}; continuing with English subtitle only.",
+                flush=True,
+            )
 
     video_id = metadata.get("id")
     title = metadata.get("title") or video_id or "downloaded-video"

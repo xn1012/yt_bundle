@@ -73,6 +73,8 @@ This will:
 - choose the best available processing source, falling back to media transcription
 - generate the bundle automatically
 
+When English subtitles are available, the downloader fetches English first and then makes at most one best-effort attempt to fetch a preferred Chinese subtitle. If that Chinese attempt fails, the pipeline continues with the English subtitle and downstream translation.
+
 In the normal workflow, `.srt` is the retained intermediate artifact. If the pipeline must transcribe from video or audio, Whisper output is persisted as `.srt` and the reading drafts are generated from that subtitle timeline.
 
 ## Scripts
