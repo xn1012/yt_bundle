@@ -64,10 +64,12 @@ python3 scripts/make_transcript_bundle.py "<video-audio-or-srt-path>" --bilingua
 
 - Use `-h` on any bundled script if options are unclear.
 - Use `--cookies-from-browser chrome` first when YouTube blocks anonymous access and the user has not provided a cookies file.
-- Use `--bootstrap-whisper` only when video transcription is required and no working Whisper runtime is already available.
+- Use `--bootstrap-whisper` only when media transcription is required and no working transcription runtime is already available. The script now prefers `faster-whisper` and falls back to `openai-whisper` only if needed.
 - If usable outputs already exist in a temp directory or nearby workspace, prefer moving, renaming, or reusing those artifacts instead of rerunning expensive download, transcription, or translation steps. Only regenerate when the user explicitly asks for a fresh run.
 - For directory jobs based on existing `.srt` files, plain `--batch` is enough. If some items still have only `.mp4` or `.mp3`, the script reports them as a stage-2 fallback and asks before starting Whisper transcription.
 - In the normal workflow, subtitle timing should be preserved all the way through. If the source is video or audio, persist the Whisper transcription as `.srt` and build the reading draft from that subtitle timeline.
-- English subtitle sources also generate Chinese reading companions, and that translation step can be much slower than writing the base transcript plus reading draft.
+- English subtitle sources also generate Chinese reading companions. Write or refresh the English reading markdown first, then derive the Chinese markdown from that English reading draft so section headings and paragraph grouping stay aligned.
+- The translation step can be much slower than writing the base transcript plus reading draft. If a paragraph keeps timing out, keep the rest of the Chinese draft moving and mark the failed paragraph inline instead of aborting the whole file.
+- Official translation backends are preferred for English-to-Chinese drafts: use DeepL first and Google Cloud Translation second when credentials are configured. If neither key is present, the pipeline falls back to the legacy Google translate endpoint so existing workflows can still run, though large batches may be less stable.
 - `--bilingual-docx` only applies to English sources with both English and Chinese reading markdown available. The exported `.docx` is section-aligned and alternates English and Chinese paragraphs inside each section.
 - Read [references/workflow.md](references/workflow.md) when you need the exact output conventions or a reminder of which script to call.

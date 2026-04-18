@@ -36,10 +36,27 @@ python3 -m pip install -r requirements.txt
 Notes:
 
 - `yt-dlp` is used for downloading video and subtitle sources.
-- `openai-whisper` is used when the pipeline must transcribe from video.
+- `faster-whisper` is the preferred backend when the pipeline must transcribe from audio or video, with `openai-whisper` kept as a fallback.
 - `ffmpeg` is required by `yt-dlp` audio extraction and Whisper media handling.
 - `requests` is used by the older bilingual helper script.
 - `python-docx` is used for bilingual reading docx export.
+- Translation backends now run in this order for English-to-Chinese generation:
+  - primary: DeepL API
+  - secondary: Google Cloud Translation API
+  - final fallback: legacy Google translate endpoint
+
+If official credentials are available, set them before generating Chinese reading drafts:
+
+```bash
+export DEEPL_API_KEY="..."
+# optional for DeepL Pro or custom endpoint
+export DEEPL_API_URL="https://api.deepl.com/v2/translate"
+
+# optional secondary fallback
+export GOOGLE_CLOUD_TRANSLATE_API_KEY="..."
+```
+
+Without either key, the pipeline will still fall back to the legacy Google endpoint so existing workflows keep working, but large batches may be less stable.
 
 ## Recommended Entry Point
 
@@ -147,7 +164,7 @@ python3 scripts/make_transcript_bundle.py "/path/to/file.mp4"
 python3 scripts/make_transcript_bundle.py "/path/to/file.mp3"
 ```
 
-When the local source is English, this script also writes a Chinese reading file.
+When the local source is English, this script first writes the English reading markdown, then generates the Chinese reading markdown from that English reading draft so section headings and boundaries stay aligned.
 
 When the local source is video or audio, the script persists Whisper output as a same-basename `.srt` beside the final reading drafts.
 
@@ -182,6 +199,13 @@ If the source is English, it also creates:
 Optional bilingual docx output for English sources:
 
 - `Example Video [abc123] 双语阅读整理稿.docx`
+
+For English sources, the Chinese reading markdown uses the English reading markdown as its structural source of truth. In practice that means:
+
+- regenerate or refresh the English reading markdown first
+- derive the Chinese reading markdown from the English markdown sections
+- preserve section timestamps and paragraph grouping so bilingual outputs stay aligned
+- use official translation APIs first, then fall back to the legacy Google endpoint when no key is configured or official requests fail; if a paragraph still fails after bounded retries, mark that paragraph inline so the file still lands on disk
 
 ## Help
 

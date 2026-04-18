@@ -4,6 +4,7 @@ import argparse
 import bisect
 import hashlib
 import json
+import multiprocessing
 import os
 import re
 import shutil
@@ -14,10 +15,16 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from make_bilingual_reading_docx import bilingual_docx_output_path, write_bilingual_docx
+from make_bilingual_reading_docx import (
+    Section as MarkdownSection,
+    bilingual_docx_output_path,
+    parse_sections as parse_md_sections,
+    write_bilingual_docx,
+)
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}
@@ -45,7 +52,12 @@ LANGUAGE_SUFFIXES = {
     "zh-hant",
     "zh-tw",
 }
-TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
+DEEPL_TRANSLATE_URLS = (
+    "https://api-free.deepl.com/v2/translate",
+    "https://api.deepl.com/v2/translate",
+)
+GOOGLE_CLOUD_TRANSLATE_URL = "https://translation.googleapis.com/language/translate/v2"
+LEGACY_TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
 ZH_LANGUAGE_SUFFIXES = {"zh", "zh-cn", "zh-hans", "zh-hant", "zh-tw"}
 EN_LANGUAGE_SUFFIXES = {"en", "en-orig"}
 SENTENCE_END_CHARS = "。！？!?；;."
@@ -53,7 +65,88 @@ ZH_RE = re.compile(r"[\u4e00-\u9fff]+")
 EN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+_.-]*")
 SRT_BREAK_RE = re.compile(r"\n\s*\n", re.MULTILINE)
 SENTENCE_SPLIT_RE = re.compile(r'(?<=[。！？!?])\s+|(?<=[.])\s+(?=(?:["“”‘’\']?[A-Z]))')
-CACHE_VERSION = 2
+HEADING_TIMESTAMP_RE = re.compile(r"(\d{2}:\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}:\d{2})")
+CACHE_VERSION = 3
+SUPPORTED_CACHE_VERSIONS = {3}
+TRANSLATION_ATTEMPT_TIMEOUT = 20
+TRANSLATION_MAX_ATTEMPTS = 2
+TRANSLATION_FAILURE_PREFIX = "【翻译失败，以下保留英文原文】"
+WEAK_TAIL_WORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "if",
+    "of",
+    "to",
+    "in",
+    "on",
+    "for",
+    "with",
+    "at",
+    "by",
+    "from",
+    "into",
+    "onto",
+    "up",
+    "down",
+    "out",
+    "off",
+    "over",
+    "under",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "this",
+    "that",
+    "these",
+    "those",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "why",
+    "how",
+    "my",
+    "your",
+    "our",
+    "their",
+    "his",
+    "her",
+    "its",
+    "just",
+    "like",
+    "because",
+    "as",
+    "when",
+    "then",
+    "than",
+    "can",
+    "could",
+    "would",
+    "should",
+    "will",
+    "may",
+    "might",
+    "must",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "not",
+    "very",
+    "more",
+    "most",
+}
 
 TRANSLATION_REPLACEMENTS = {
     "云代码": "Claude Code",
@@ -68,6 +161,40 @@ TRANSLATION_REPLACEMENTS = {
     "云 AI": "Claude AI",
     "quadr": "Claude",
 }
+
+FASTER_WHISPER_DRIVER = r"""
+from faster_whisper import WhisperModel
+from pathlib import Path
+import sys
+
+media_path = Path(sys.argv[1])
+model_name = sys.argv[2]
+output_path = Path(sys.argv[3])
+
+model = WhisperModel(model_name, device="cpu", compute_type="int8")
+segments, _info = model.transcribe(str(media_path), vad_filter=True)
+
+def srt_timestamp(seconds: float) -> str:
+    total_ms = max(0, int(round(seconds * 1000)))
+    hh, rem = divmod(total_ms, 3600_000)
+    mm, rem = divmod(rem, 60_000)
+    ss, ms = divmod(rem, 1000)
+    return f"{hh:02d}:{mm:02d}:{ss:02d},{ms:03d}"
+
+count = 0
+with output_path.open("w", encoding="utf-8") as handle:
+    for count, segment in enumerate(segments, start=1):
+        text = " ".join(segment.text.strip().split())
+        if not text:
+            continue
+        print(f"[fw] {srt_timestamp(segment.start)} - {srt_timestamp(segment.end)}", flush=True)
+        handle.write(f"{count}\n")
+        handle.write(f"{srt_timestamp(segment.start)} --> {srt_timestamp(segment.end)}\n")
+        handle.write(f"{text}\n\n")
+
+if count == 0:
+    raise RuntimeError("faster-whisper produced no subtitle segments.")
+"""
 
 @dataclass
 class Cue:
@@ -143,7 +270,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bootstrap-whisper",
         action="store_true",
-        help="Create a temporary venv and install openai-whisper if no Whisper runtime is found.",
+        help="Create a temporary venv and install a transcription runtime (prefer faster-whisper, fallback openai-whisper) if none is available.",
     )
     parser.add_argument(
         "--batch",
@@ -255,7 +382,7 @@ def load_translation_cache(cache_path: Path) -> dict[str, str]:
     if not cache_path.exists():
         return {}
     payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    if payload.get("version") != CACHE_VERSION:
+    if payload.get("version") not in SUPPORTED_CACHE_VERSIONS:
         return {}
     return payload.get("translations", {})
 
@@ -268,7 +395,81 @@ def save_translation_cache(cache_path: Path, cache: dict[str, str]) -> None:
     cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def request_translation(text: str) -> str:
+def json_request(url: str, payload: dict[str, object], headers: dict[str, str] | None = None) -> dict[str, object]:
+    body = json.dumps(payload).encode("utf-8")
+    request_headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0",
+    }
+    if headers:
+        request_headers.update(headers)
+    request = Request(url, data=body, headers=request_headers, method="POST")
+    with urlopen(request, timeout=15) as response:  # noqa: S310
+        return json.loads(response.read().decode("utf-8"))
+
+
+def deepl_api_key() -> str | None:
+    return os.environ.get("DEEPL_API_KEY") or None
+
+
+def deepl_api_urls() -> list[str]:
+    configured = os.environ.get("DEEPL_API_URL")
+    if configured:
+        return [configured]
+    return list(DEEPL_TRANSLATE_URLS)
+
+
+def google_cloud_translate_api_key() -> str | None:
+    return os.environ.get("GOOGLE_CLOUD_TRANSLATE_API_KEY") or os.environ.get("GOOGLE_API_KEY") or None
+
+
+def request_translation_deepl(text: str) -> str:
+    api_key = deepl_api_key()
+    if not api_key:
+        raise RuntimeError("DeepL API key is not configured. Set DEEPL_API_KEY.")
+
+    payload = {
+        "text": [text],
+        "source_lang": "EN",
+        "target_lang": os.environ.get("DEEPL_TARGET_LANG", "ZH-HANS"),
+    }
+    last_error: Exception | None = None
+    for url in deepl_api_urls():
+        try:
+            response = json_request(url, payload, headers={"Authorization": f"DeepL-Auth-Key {api_key}"})
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+        translations = response.get("translations") or []
+        if translations and isinstance(translations, list):
+            translated = normalize_line(str(translations[0].get("text", "")))
+            if translated:
+                return cleanup_translation(translated)
+        last_error = RuntimeError("DeepL returned no translated text.")
+    raise RuntimeError(f"DeepL translation failed: {last_error}") from last_error
+
+
+def request_translation_google_cloud(text: str) -> str:
+    api_key = google_cloud_translate_api_key()
+    if not api_key:
+        raise RuntimeError("Google Cloud Translation API key is not configured. Set GOOGLE_CLOUD_TRANSLATE_API_KEY.")
+    params = urlencode({"key": api_key})
+    payload = {
+        "q": text,
+        "source": "en",
+        "target": os.environ.get("GOOGLE_TRANSLATE_TARGET", "zh-CN"),
+        "format": "text",
+    }
+    response = json_request(f"{GOOGLE_CLOUD_TRANSLATE_URL}?{params}", payload)
+    translations = response.get("data", {}).get("translations", [])
+    if translations and isinstance(translations, list):
+        translated = normalize_line(str(translations[0].get("translatedText", "")))
+        if translated:
+            return cleanup_translation(translated)
+    raise RuntimeError("Google Cloud Translation returned no translated text.")
+
+
+def request_translation_legacy_google(text: str) -> str:
     params = urlencode(
         {
             "client": "gtx",
@@ -278,12 +479,78 @@ def request_translation(text: str) -> str:
             "q": text,
         }
     )
-    request = Request(f"{TRANSLATE_URL}?{params}", headers={"User-Agent": "Mozilla/5.0"})
-    with urlopen(request, timeout=30) as response:  # noqa: S310
+    request = Request(f"{LEGACY_TRANSLATE_URL}?{params}", headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=15) as response:  # noqa: S310
         payload = json.loads(response.read().decode("utf-8"))
     pieces = payload[0] or []
     translated = "".join(piece[0] for piece in pieces if piece and piece[0]).strip()
+    if not translated:
+        raise RuntimeError("Legacy Google translate returned no translated text.")
     return cleanup_translation(translated)
+
+
+def configured_translation_backends() -> list[tuple[str, Callable[[str], str]]]:
+    backends: list[tuple[str, Callable[[str], str]]] = []
+    if deepl_api_key():
+        backends.append(("DeepL", request_translation_deepl))
+    if google_cloud_translate_api_key():
+        backends.append(("Google Cloud Translation", request_translation_google_cloud))
+    backends.append(("Legacy Google Translate", request_translation_legacy_google))
+    return backends
+
+
+def request_translation_with_fallbacks(text: str) -> str:
+    backends = configured_translation_backends()
+    last_error: Exception | None = None
+    for _label, translator in backends:
+        try:
+            translated = translator(text)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+        if translated:
+            return translated
+    raise RuntimeError(f"All translation services failed: {last_error}") from last_error
+
+
+def _translate_chunk_worker(text: str, result_queue: multiprocessing.Queue) -> None:
+    try:
+        result_queue.put(("ok", request_translation_with_fallbacks(text)))
+    except Exception as exc:  # noqa: BLE001
+        result_queue.put(("err", repr(exc)))
+
+
+def translate_chunk_with_timeout(text: str, timeout: int = TRANSLATION_ATTEMPT_TIMEOUT) -> str:
+    context = multiprocessing.get_context("fork")
+    result_queue = context.Queue()
+    worker = context.Process(target=_translate_chunk_worker, args=(text, result_queue))
+    worker.start()
+    worker.join(timeout)
+
+    if worker.is_alive():
+        worker.kill()
+        worker.join()
+        raise TimeoutError(f"Translation worker exceeded {timeout}s timeout.")
+
+    if result_queue.empty():
+        raise RuntimeError("Translation worker exited without returning a result.")
+
+    status, payload = result_queue.get()
+    if status != "ok":
+        raise RuntimeError(payload)
+    return cleanup_translation(payload)
+
+
+def translation_failure_text(source_text: str, error: Exception | None) -> str:
+    reason = "未知错误"
+    if error is not None:
+        reason = str(error).strip() or type(error).__name__
+    reason = reason.splitlines()[0][:120]
+    return f"{TRANSLATION_FAILURE_PREFIX}（原因：{reason}）\n{source_text}"
+
+
+def is_translation_failure_paragraph(paragraph: str) -> bool:
+    return normalize_line(paragraph).startswith(TRANSLATION_FAILURE_PREFIX)
 
 
 def split_translation_chunk(text: str, max_chars: int) -> list[str]:
@@ -341,40 +608,55 @@ def translate_text(text: str, max_chars: int = 240) -> str:
     if not chunks:
         return ""
     if len(chunks) == 1:
-        translated = request_translation(chunks[0])
+        translated = translate_chunk_with_timeout(chunks[0])
         if detect_language_from_text(chunks[0]) == "en" and detect_language_from_text(translated) == "en" and len(chunks[0]) > 120:
             finer_chunks = split_for_translation(chunks[0], max_chars=120)
             if len(finer_chunks) > 1:
-                return cleanup_translation(" ".join(request_translation(chunk) for chunk in finer_chunks))
+                return cleanup_translation(" ".join(translate_chunk_with_timeout(chunk) for chunk in finer_chunks))
         return translated
-    return cleanup_translation(" ".join(request_translation(chunk) for chunk in chunks))
+    return cleanup_translation(" ".join(translate_chunk_with_timeout(chunk) for chunk in chunks))
 
 
-def translate_paragraphs(paragraphs: list[Paragraph], output_dir: Path, base_name: str) -> list[Paragraph]:
+def translate_texts(texts: list[str], output_dir: Path, base_name: str) -> list[str]:
     cache_path = translation_cache_path(output_dir=output_dir, base_name=base_name)
     cache = load_translation_cache(cache_path)
-    translated: list[Paragraph] = []
-    total = len(paragraphs)
+    translated: list[str] = []
+    total = len(texts)
 
-    for index, paragraph in enumerate(paragraphs, start=1):
-        source_text = paragraph.text
-        if source_text in cache:
-            translated_text = cleanup_translation(cache[source_text])
+    for index, source_text in enumerate(texts, start=1):
+        normalized_text = normalize_line(source_text)
+        cached_translation = cleanup_translation(cache[normalized_text]) if normalized_text in cache else None
+        if cached_translation is not None and not (
+            detect_language_from_text(normalized_text) == "en" and detect_language_from_text(cached_translation) == "en"
+        ):
+            translated_text = cached_translation
         else:
             last_error: Exception | None = None
-            for attempt in range(5):
+            for attempt in range(TRANSLATION_MAX_ATTEMPTS):
                 try:
-                    translated_text = translate_text(source_text)
-                    cache[source_text] = translated_text
+                    translated_text = translate_text(normalized_text)
+                    cache[normalized_text] = translated_text
                     save_translation_cache(cache_path, cache)
                     time.sleep(0.35)
                     break
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc
-                    time.sleep(1.2 * (attempt + 1))
+                    time.sleep(0.6 * (attempt + 1))
             else:
-                raise RuntimeError(f"Failed to translate paragraph {index}: {last_error}") from last_error
+                translated_text = translation_failure_text(normalized_text, last_error)
 
+        translated.append(translated_text)
+        if index == 1 or index == total or index % 25 == 0:
+            print(f"  [zh] {index}/{total}", flush=True)
+
+    return translated
+
+
+def translate_paragraphs(paragraphs: list[Paragraph], output_dir: Path, base_name: str) -> list[Paragraph]:
+    total = len(paragraphs)
+    translated_texts = translate_texts([paragraph.text for paragraph in paragraphs], output_dir=output_dir, base_name=base_name)
+    translated: list[Paragraph] = []
+    for paragraph, translated_text in zip(paragraphs, translated_texts):
         translated.append(
             Paragraph(
                 start_ms=paragraph.start_ms,
@@ -382,10 +664,35 @@ def translate_paragraphs(paragraphs: list[Paragraph], output_dir: Path, base_nam
                 text=translated_text,
             )
         )
-        if index == 1 or index == total or index % 25 == 0:
-            print(f"  [zh] {index}/{total}", flush=True)
 
+    if len(translated) != total:
+        raise RuntimeError("Translated paragraph count does not match source paragraph count.")
     return translated
+
+
+def translate_markdown_sections(
+    sections: list[MarkdownSection],
+    output_dir: Path,
+    base_name: str,
+) -> list[MarkdownSection]:
+    source_texts = [paragraph for section in sections for paragraph in section.paragraphs]
+    translated_texts = translate_texts(source_texts, output_dir=output_dir, base_name=base_name)
+
+    translated_sections: list[MarkdownSection] = []
+    cursor = 0
+    for section in sections:
+        count = len(section.paragraphs)
+        translated_sections.append(
+            MarkdownSection(
+                heading=section.heading,
+                paragraphs=translated_texts[cursor : cursor + count],
+            )
+        )
+        cursor += count
+
+    if cursor != len(translated_texts):
+        raise RuntimeError("Translated markdown section count does not match source section structure.")
+    return translated_sections
 
 
 def load_srt(path: Path) -> list[Cue]:
@@ -430,9 +737,86 @@ def split_completed_sentences(text: str) -> tuple[list[str], str]:
     return parts[:-1], parts[-1]
 
 
+def is_punctuation_sparse(cues: list[Cue]) -> bool:
+    sample = " ".join(cue.text for cue in cues[:240])
+    if not sample:
+        return False
+    sentence_marks = sum(sample.count(mark) for mark in ".!?。！？")
+    word_count = len(sample.split())
+    if word_count < 40:
+        return False
+    return sentence_marks == 0 or sentence_marks / max(word_count, 1) < 0.01
+
+
+def paragraph_has_good_break(text: str) -> bool:
+    normalized = normalize_line(text)
+    if not normalized:
+        return False
+    if normalized[-1] in SENTENCE_END_CHARS:
+        return True
+    words = normalized.split()
+    if not words:
+        return False
+    last_word = re.sub(r"^[^A-Za-z]+|[^A-Za-z]+$", "", words[-1]).lower()
+    if not last_word:
+        return False
+    return last_word not in WEAK_TAIL_WORDS
+
+
+def build_paragraphs_from_sparse_punctuation(cues: list[Cue]) -> list[Paragraph]:
+    if not cues:
+        return []
+
+    paragraphs: list[Paragraph] = []
+    buffer: list[Cue] = []
+    current_chars = 0
+    target_chars = 820
+    preferred_max_chars = 1100
+    hard_max_chars = 1450
+    max_duration_ms = 105000
+
+    def flush_buffer() -> None:
+        nonlocal buffer, current_chars
+        if not buffer:
+            return
+        text = normalize_line(" ".join(cue.text for cue in buffer))
+        paragraphs.append(
+            Paragraph(
+                start_ms=buffer[0].start_ms,
+                end_ms=buffer[-1].end_ms,
+                text=text,
+            )
+        )
+        buffer = []
+        current_chars = 0
+
+    for cue in cues:
+        buffer.append(cue)
+        current_text = normalize_line(" ".join(item.text for item in buffer))
+        current_chars = len(current_text)
+        current_duration = buffer[-1].end_ms - buffer[0].start_ms
+
+        if current_chars >= hard_max_chars:
+            flush_buffer()
+            continue
+        if current_chars < target_chars:
+            continue
+        if current_duration >= max_duration_ms and paragraph_has_good_break(current_text):
+            flush_buffer()
+            continue
+        if current_chars >= preferred_max_chars and paragraph_has_good_break(current_text):
+            flush_buffer()
+
+    flush_buffer()
+    return paragraphs
+
+
 def build_paragraphs(cues: list[Cue]) -> list[Paragraph]:
     if not cues:
         return []
+
+    if is_punctuation_sparse(cues):
+        return build_paragraphs_from_sparse_punctuation(cues)
 
     timestamp_free_source = all(cue.start_ms == 0 and cue.end_ms == 0 for cue in cues)
     sentence_units: list[Paragraph] = []
@@ -672,6 +1056,40 @@ def write_reading_md(
     write_text(path, lines)
 
 
+def chinese_heading_from_english(heading: str, index: int) -> str:
+    match = HEADING_TIMESTAMP_RE.search(heading)
+    if match:
+        start, end = match.groups()
+        return f"## 第 {index} 部分（{start} - {end}）"
+    return f"## 第 {index} 部分"
+
+
+def write_translated_reading_md(
+    path: Path,
+    title: str,
+    source_path: Path,
+    sections: list[MarkdownSection],
+    translated_sections: list[MarkdownSection],
+) -> None:
+    lines = [
+        f"# {title} 阅读整理稿",
+        "",
+        "这是一份根据英文阅读稿自动翻译并整理的中文版阅读稿，便于快速通读主线内容。",
+        "",
+        f"- Source: `{source_path.name}`",
+        f"- Generated: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`",
+        f"- Paragraphs: `{sum(len(section.paragraphs) for section in translated_sections)}`",
+        "",
+    ]
+
+    for index, (english_section, chinese_section) in enumerate(zip(sections, translated_sections), start=1):
+        lines.extend([chinese_heading_from_english(english_section.heading, index), ""])
+        for paragraph in chinese_section.paragraphs:
+            lines.extend([paragraph, ""])
+
+    write_text(path, lines)
+
+
 def reading_md_source_name(path: Path) -> str | None:
     if not path.exists():
         return None
@@ -740,6 +1158,8 @@ def reading_md_body_paragraphs(path: Path) -> list[str]:
 
 def translated_md_has_untranslated_paragraphs(path: Path) -> bool:
     for paragraph in reading_md_body_paragraphs(path):
+        if is_translation_failure_paragraph(paragraph):
+            return True
         if detect_language_from_text(paragraph) == "en":
             return True
     return False
@@ -780,7 +1200,17 @@ def whisper_available(python_executable: str) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "ok"
 
 
-def ensure_whisper_python(bootstrap: bool) -> str:
+def faster_whisper_available(python_executable: str) -> bool:
+    result = subprocess.run(
+        [python_executable, "-c", "from faster_whisper import WhisperModel; print('ok')"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "ok"
+
+
+def ensure_transcription_runtime(bootstrap: bool) -> tuple[str, str]:
     env_python = os.environ.get("AIWRITING_WHISPER_PYTHON")
     candidates = [
         env_python,
@@ -790,12 +1220,16 @@ def ensure_whisper_python(bootstrap: bool) -> str:
     ]
 
     for candidate in candidates:
-        if candidate and Path(candidate).exists() and whisper_available(candidate):
-            return candidate
+        if not candidate or not Path(candidate).exists():
+            continue
+        if faster_whisper_available(candidate):
+            return candidate, "faster-whisper"
+        if whisper_available(candidate):
+            return candidate, "openai-whisper"
 
     if not bootstrap:
         raise RuntimeError(
-            "Whisper runtime not found. Set AIWRITING_WHISPER_PYTHON, use an existing env, or rerun with --bootstrap-whisper."
+            "Transcription runtime not found. Set AIWRITING_WHISPER_PYTHON, use an existing env, or rerun with --bootstrap-whisper."
         )
 
     venv_path = Path("/tmp/aiwriting_whisper_venv")
@@ -803,12 +1237,33 @@ def ensure_whisper_python(bootstrap: bool) -> str:
         run_command([sys.executable, "-m", "venv", str(venv_path)])
 
     python_executable = str(venv_path / "bin" / "python")
-    run_command([python_executable, "-m", "pip", "install", "-U", "pip", "setuptools", "wheel", "openai-whisper"])
-    return python_executable
+    run_command([python_executable, "-m", "pip", "install", "-U", "pip", "setuptools", "wheel", "faster-whisper"])
+    if faster_whisper_available(python_executable):
+        return python_executable, "faster-whisper"
+    run_command([python_executable, "-m", "pip", "install", "-U", "openai-whisper"])
+    if whisper_available(python_executable):
+        return python_executable, "openai-whisper"
+    raise RuntimeError("Failed to provision a working transcription runtime.")
 
 
 def generated_subtitle_path(output_dir: Path, base_name: str) -> Path:
     return output_dir / f"{base_name}.srt"
+
+
+def find_companion_media(input_path: Path) -> Path | None:
+    directory = input_path.parent
+    base_name = canonical_base_name(input_path)
+    media_candidates = [
+        candidate
+        for candidate in sorted(directory.iterdir())
+        if candidate.is_file()
+        and candidate != input_path
+        and candidate.suffix.lower() in AUDIO_EXTENSIONS.union(VIDEO_EXTENSIONS)
+        and canonical_base_name(candidate) == base_name
+    ]
+    if not media_candidates:
+        return None
+    return min(media_candidates, key=source_priority)
 
 
 def transcribe_media_to_cues(
@@ -818,33 +1273,52 @@ def transcribe_media_to_cues(
     output_dir: Path,
     base_name: str,
 ) -> ProcessingResult:
-    whisper_python = ensure_whisper_python(bootstrap=bootstrap)
+    persisted_srt_path = generated_subtitle_path(output_dir=output_dir, base_name=base_name)
+    if persisted_srt_path.exists():
+        return ProcessingResult(
+            cues=load_srt(persisted_srt_path),
+            source_path=persisted_srt_path,
+            generated_subtitle_path=persisted_srt_path,
+        )
+
+    transcription_python, backend = ensure_transcription_runtime(bootstrap=bootstrap)
     media_kind = "audio" if media_path.suffix.lower() in AUDIO_EXTENSIONS else "video"
-    print(f"Transcribing {media_kind} with Whisper: {media_path.name} (model={model_name})", flush=True)
+    print(f"Transcribing {media_kind} with {backend}: {media_path.name} (model={model_name})", flush=True)
 
     with tempfile.TemporaryDirectory(prefix="aiwriting_whisper_") as temp_dir:
-        run_command(
-            [
-                whisper_python,
-                "-m",
-                "whisper",
-                str(media_path),
-                "--model",
-                model_name,
-                "--task",
-                "transcribe",
-                "--fp16",
-                "False",
-                "--output_format",
-                "srt",
-                "--output_dir",
-                temp_dir,
-            ]
-        )
+        if backend == "faster-whisper":
+            run_command(
+                [
+                    transcription_python,
+                    "-c",
+                    FASTER_WHISPER_DRIVER,
+                    str(media_path),
+                    model_name,
+                    str(Path(temp_dir) / f"{media_path.stem}.srt"),
+                ]
+            )
+        else:
+            run_command(
+                [
+                    transcription_python,
+                    "-m",
+                    "whisper",
+                    str(media_path),
+                    "--model",
+                    model_name,
+                    "--task",
+                    "transcribe",
+                    "--fp16",
+                    "False",
+                    "--output_format",
+                    "srt",
+                    "--output_dir",
+                    temp_dir,
+                ]
+            )
         srt_path = Path(temp_dir) / f"{media_path.stem}.srt"
         if not srt_path.exists():
-            raise RuntimeError(f"Whisper finished but did not produce expected srt file: {srt_path}")
-        persisted_srt_path = generated_subtitle_path(output_dir=output_dir, base_name=base_name)
+            raise RuntimeError(f"{backend} finished but did not produce expected srt file: {srt_path}")
         shutil.copy2(srt_path, persisted_srt_path)
         return ProcessingResult(
             cues=load_srt(persisted_srt_path),
@@ -862,7 +1336,23 @@ def process_input(
 ) -> ProcessingResult:
     suffix = input_path.suffix.lower()
     if suffix in SUBTITLE_EXTENSIONS:
-        return ProcessingResult(cues=load_srt(input_path), source_path=input_path)
+        cues = load_srt(input_path)
+        source_language = infer_language_from_path(input_path) or detect_language_from_cues(cues)
+        if source_language == "en" and is_punctuation_sparse(cues):
+            companion_media = find_companion_media(input_path)
+            if companion_media is not None:
+                print(
+                    f"Punctuation-sparse subtitle detected; using companion media transcription from {companion_media.name}",
+                    flush=True,
+                )
+                return transcribe_media_to_cues(
+                    companion_media,
+                    model_name=whisper_model,
+                    bootstrap=bootstrap_whisper,
+                    output_dir=output_dir,
+                    base_name=base_name,
+                )
+        return ProcessingResult(cues=cues, source_path=input_path)
     if suffix in VIDEO_EXTENSIONS or suffix in AUDIO_EXTENSIONS:
         return transcribe_media_to_cues(
             input_path,
@@ -996,13 +1486,17 @@ def bundle_status(output_dir: Path, base_name: str, candidates: list[Path]) -> B
                 language_hint = None
             if language_hint and language_hint != "unknown":
                 break
-        if language_hint == "unknown":
-            language_hint = None
+    if language_hint == "unknown":
+        language_hint = None
 
-    if language_hint == "en" and reading_exists and zh_reading_exists:
-        if bilingual_sections_need_refresh(reading_path, zh_reading_path):
+    if language_hint == "en":
+        if not reading_exists:
             zh_reading_exists = False
-        elif translated_md_has_untranslated_paragraphs(zh_reading_path):
+        elif zh_reading_exists and reading_md_source_name(zh_reading_path) != reading_path.name:
+            zh_reading_exists = False
+        elif zh_reading_exists and bilingual_sections_need_refresh(reading_path, zh_reading_path):
+            zh_reading_exists = False
+        elif zh_reading_exists and translated_md_has_untranslated_paragraphs(zh_reading_path):
             zh_reading_exists = False
 
     return BundleStatus(
@@ -1151,16 +1645,18 @@ def generate_bundle(
         print(reading_md_path, flush=True)
     if needs_zh_extras and not status.zh_reading_exists:
         print(f"Translating English source into Chinese companion outputs for {base_name}", flush=True)
-        translated_paragraphs = translate_paragraphs(paragraphs=paragraphs, output_dir=output_dir, base_name=base_name)
-    if needs_zh_extras and not status.zh_reading_exists:
-        write_reading_md(
+        english_title, english_sections = parse_md_sections(reading_md_path)
+        translated_sections = translate_markdown_sections(
+            sections=english_sections,
+            output_dir=output_dir,
+            base_name=base_name,
+        )
+        write_translated_reading_md(
             zh_reading_md_path,
-            title=base_name,
-            source_path=processing.source_path,
-            paragraphs=translated_paragraphs,
-            language="zh",
-            translated_from="en",
-            section_lengths=section_lengths,
+            title=base_name if not english_title else base_name,
+            source_path=reading_md_path,
+            sections=english_sections,
+            translated_sections=translated_sections,
         )
         print(zh_reading_md_path, flush=True)
     if bilingual_docx and needs_zh_extras:
