@@ -8,6 +8,8 @@ from pathlib import Path
 from docx import Document
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.shared import Pt
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 
 SECTION_RE = re.compile(r"^##\s+(.+)$")
@@ -101,6 +103,35 @@ def add_labeled_paragraph(document: Document, label: str, text: str) -> None:
     paragraph.paragraph_format.space_after = Pt(8)
 
 
+def add_page_number_field(paragraph) -> None:
+    page_run = paragraph.add_run()
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = "PAGE"
+
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+
+    page_run._r.append(begin)
+    page_run._r.append(instr)
+    page_run._r.append(separate)
+    page_run._r.append(end)
+
+
+def add_centered_page_numbers(document: Document) -> None:
+    for section in document.sections:
+        footer = section.footer
+        paragraph = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        add_page_number_field(paragraph)
+
+
 def write_bilingual_docx(english_md: Path, chinese_md: Path, output_path: Path) -> Path:
     english_title, english_sections = parse_sections(english_md)
     _, chinese_sections = parse_sections(chinese_md)
@@ -133,6 +164,7 @@ def write_bilingual_docx(english_md: Path, chinese_md: Path, output_path: Path) 
             if paragraph_index < len(chinese_paragraphs):
                 add_labeled_paragraph(document, "ZH", chinese_paragraphs[paragraph_index])
 
+    add_centered_page_numbers(document)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(output_path)
     return output_path

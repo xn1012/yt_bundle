@@ -84,3 +84,4 @@ Optional bilingual docx output for English sources:
 - English subtitle batches still generate Chinese reading companions, so the translation phase can take much longer than the initial transcript and reading-file write.
 - For English sources, the Chinese reading markdown should be generated from the English reading markdown after the English draft is written or refreshed. This keeps section timestamps and paragraph grouping aligned with the English source draft.
 - The bilingual docx export is only for English sources that already have the paired English and Chinese reading markdown files. Its layout is section-based, with English and Chinese paragraphs alternating inside each section.
+- Exported bilingual docx files add centered page numbers in the footer.

@@ -72,4 +72,5 @@ python3 scripts/make_transcript_bundle.py "<video-audio-or-srt-path>" --bilingua
 - The translation step can be much slower than writing the base transcript plus reading draft. If a paragraph keeps timing out, keep the rest of the Chinese draft moving and mark the failed paragraph inline instead of aborting the whole file.
 - Official translation backends are preferred for English-to-Chinese drafts: use DeepL first and Google Cloud Translation second when credentials are configured. If neither key is present, the pipeline falls back to the legacy Google translate endpoint so existing workflows can still run, though large batches may be less stable.
 - `--bilingual-docx` only applies to English sources with both English and Chinese reading markdown available. The exported `.docx` is section-aligned and alternates English and Chinese paragraphs inside each section.
+- Exported bilingual `.docx` files also add centered page numbers in the footer.
 - Read [references/workflow.md](references/workflow.md) when you need the exact output conventions or a reminder of which script to call.

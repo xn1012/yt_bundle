@@ -199,6 +199,7 @@ If the source is English, it also creates:
 Optional bilingual docx output for English sources:
 
 - `Example Video [abc123] 双语阅读整理稿.docx`
+- bilingual docx pages include centered page numbers in the footer
 
 For English sources, the Chinese reading markdown uses the English reading markdown as its structural source of truth. In practice that means:
 
